@@ -1,0 +1,10 @@
+# Runtime data: database (contains TOTP secrets), uploads, backups. NEVER commit (NDA / privacy).
+instance/
+*.sqlite
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.vscode/
+.idea/
