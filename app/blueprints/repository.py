@@ -3,6 +3,7 @@ import hashlib, uuid
 from pathlib import Path
 from flask import Blueprint, abort, current_app, g, jsonify, request, send_file
 from werkzeug.utils import secure_filename
+from .. import convert
 from ..db import get_db, audit
 from ..security import permission_required, can, login_required
 from ..version_files import prune_version_files, version_file_path
@@ -30,8 +31,13 @@ def search():
     q = request.args
     sql = ("SELECT d.id, d.owner_id, d.title, d.description, d.school_year, d.semester, d.document_type, "
            "c.name AS category, co.code AS course, d.current_version_id, "
+           "(SELECT id FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1) AS latest_version_id, "
            "(SELECT MAX(version_no) FROM document_versions WHERE document_id=d.id) AS latest_version, "
-           "(SELECT status FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1) AS latest_status "
+           "(SELECT status FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1) AS latest_status, "
+           "(SELECT COUNT(*) FROM signatories s WHERE s.version_id=(SELECT id FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1)) AS sig_total, "
+           "(SELECT COUNT(*) FROM signatories s WHERE s.version_id=(SELECT id FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1) AND s.signed_at IS NOT NULL) AS sig_done, "
+           "EXISTS (SELECT 1 FROM signatories s WHERE s.version_id=(SELECT id FROM document_versions WHERE document_id=d.id ORDER BY version_no DESC LIMIT 1) "
+           "AND s.signer_id=? AND s.signed_at IS NULL) AS my_pending_signature "
            "FROM documents d JOIN categories c ON c.id=d.category_id "
            "LEFT JOIN courses co ON co.id=d.course_id WHERE 1=1")
     args: list = []
@@ -48,7 +54,7 @@ def search():
                 "AND v.version_no=(SELECT MAX(version_no) FROM document_versions WHERE document_id=d.id) AND v.status=?)")
         args.append(q["approval_status"])
     vis, vargs = _visible_clause()
-    rows = get_db().execute(sql + vis + " ORDER BY d.school_year DESC, d.title", args + vargs).fetchall()
+    rows = get_db().execute(sql + vis + " ORDER BY d.school_year DESC, d.title", [g.user["id"]] + args + vargs).fetchall()
     results = []
     for row in rows:
         item = dict(row)
@@ -86,6 +92,7 @@ def _add_version(db, doc_id, file, action):
     audit(action, "document", doc_id, {"version": n})
     db.commit()
     prune_version_files(db, doc_id, current_app.config["UPLOAD_DIR"])
+    convert.ensure_preview(vid, path, orig)
     return vid, n
 
 

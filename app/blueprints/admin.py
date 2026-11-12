@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from flask import Blueprint, abort, current_app, g, jsonify, request
 from werkzeug.security import generate_password_hash
+from .. import convert
 from ..db import get_db, audit
 from ..security import permission_required, new_totp_secret, provisioning_uri, totp_qr_data_uri
 
@@ -133,3 +134,9 @@ def list_requests():
         "SELECT r.id, r.status, u.full_name AS evaluator, d.title FROM access_requests r "
         "JOIN users u ON u.id=r.evaluator_id JOIN documents d ON d.id=r.document_id ORDER BY r.status, r.id DESC").fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+@bp.get("/system")
+@permission_required("admin.users")
+def system():
+    return jsonify(converter=convert.converter_info())

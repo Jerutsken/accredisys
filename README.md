@@ -54,3 +54,15 @@ encryption at rest, password reset, hosting/deploy config.
 6. **Category tree** is a placeholder; the Chair asked for main categories + subcategories and will advise.
 7. **Data Privacy**: SRS "RA 10173" is the Data Privacy Act; BR-7 reads "restricted to *unauthorized* roles" (typo for *authorized*).
 8. Maintenance ownership after SE2 was raised by the Chair; SPMP assigns it to "existing departmental personnel" — get that confirmed.
+
+## PDF annotations and file previews
+
+PDF highlights and comment threads are stored in the database and do not modify
+uploaded originals. Open a retained document version from its version history to
+view the PDF and add or manage comments. The owner and Department Chair can see
+comments; other permitted viewers can read the file without seeing them.
+
+Word, PowerPoint, Excel, text, and image uploads can be converted to PDF previews
+with LibreOffice. Install LibreOffice on the server for conversion; PDF viewing
+and annotation do not require it. Previews are stored with uploads and included
+in backups. Install the PDF export dependency with `pip install -r requirements.txt`.

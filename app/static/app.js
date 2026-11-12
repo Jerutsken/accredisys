@@ -57,7 +57,6 @@ const SCREENS = {
   home: ["Home", ["dept_chair", "faculty"]],
   repository: ["Evidence Repository", ["dept_chair", "faculty", "external_evaluator"]],
   upload: ["Upload", ["dept_chair", "faculty"]],
-  approvals: ["Approvals", ["dept_chair", "faculty"]],
   requirements: ["Requirements", ["dept_chair", "faculty"]],
   dashboard: ["Compliance Dashboard", ["dept_chair", "faculty"]],
   faculty: ["Faculty/Teaching Information", ["dept_chair", "faculty"]],
@@ -65,13 +64,13 @@ const SCREENS = {
   profile: ["Profile", ["dept_chair", "faculty", "external_evaluator"]],
   access: ["Access Requests", ["external_evaluator"]],
   admin: ["Administration", ["dept_chair"]],
+  view: ["Document Viewer", ["dept_chair", "faculty", "external_evaluator"], true],
 };
 const ICONS = {
   home: "home",
   repository: "evidence-repository",
   certifications: "certification-repository",
   upload: "upload",
-  approvals: "approvals",
   requirements: "requirements",
   faculty: "faculty-information",
   dashboard: "compliance-dashboard",
@@ -87,17 +86,18 @@ async function start() {
   meta = me.role === "external_evaluator" ? { categories: [], courses: [] } : await api("/api/documents/meta");
   $("#login").classList.add("hidden"); $("#shell").classList.remove("hidden");
   $("#who").textContent = `${me.name} · ${me.role.replace("_", " ")}`;
-  $("#nav").innerHTML = Object.entries(SCREENS).filter(([, v]) => v[1].includes(me.role)).map(([k, v]) => `<a data-k="${k}" href="#${k}"><span class="ic"><svg aria-hidden="true" focusable="false"><use href="/static/icons/sprite.svg#icon-${ICONS[k]}"></use></svg></span>${v[0]}</a>`).join("");
+  $("#nav").innerHTML = Object.entries(SCREENS).filter(([, v]) => v[1].includes(me.role) && !v[2]).map(([k, v]) => `<a data-k="${k}" href="#${k}"><span class="ic"><svg aria-hidden="true" focusable="false"><use href="/static/icons/sprite.svg#icon-${ICONS[k]}"></use></svg></span>${v[0]}</a>`).join("");
   $("#avatar").textContent = (me.name || "?")[0].toUpperCase(); $("#avatar").className = "avatar"; $("#newbtn").classList.toggle("hidden", !["dept_chair", "faculty"].includes(me.role));
   route();
 }
 async function route() {
   if (!me) return;
   document.body.classList.remove("navopen");
-  let k = location.hash.slice(1); if (!SCREENS[k] || !SCREENS[k][1].includes(me.role)) k = me.role === "external_evaluator" ? "repository" : "home";
-  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.k === k));
+  let [k, arg] = location.hash.slice(1).split("/"); if (!SCREENS[k] || !SCREENS[k][1].includes(me.role)) k = me.role === "external_evaluator" ? "repository" : "home";
+  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.k === (k === "view" ? "repository" : k)));
+  $("#main").className = k === "view" ? "vmain" : "";
   $("#main").innerHTML = `<p class="muted">Loading…</p>`;
-  try { await VIEWS[k]($("#main")); } catch (e) { $("#main").innerHTML = `<div class="panel err">${esc(e.message)}</div>`; }
+  try { await VIEWS[k]($("#main"), arg); } catch (e) { $("#main").innerHTML = `<div class="panel err">${esc(e.message)}</div>`; }
 }
 window.onhashchange = route;
 
@@ -134,16 +134,55 @@ async function docsTable(el, target) {
     repositoryFocusDocId = null;
     el.scrollTop = 0;
   }
-  const acts = d => `<button class="sm" type="button" data-dl="${d.id}">Download</button>${d.can_update ? `<button class="sm sec" type="button" data-update="${d.id}">Replace file</button>` : ""}${chair() ? `<button class="sm" type="button" data-r="${d.id}">Request update</button>` : ""}`;
+  const pending = d => d.latest_status === "Pending Review";
+  const statusTag = d => chair() && pending(d)
+    ? `<select class="chip status-edit" data-status="${d.latest_version_id}" aria-label="Change document status"><option value="Current Approved Version">approved</option><option value="Pending Review" selected>pending approval</option><option value="Requires Revision">rejected</option></select>`
+    : badge(d.latest_status);
+  const acts = d => `${chair() && pending(d) ? `<button class="sm sec" type="button" data-sg="${d.latest_version_id}">+ Signatory</button>` : ""}<button class="sm" type="button" data-open="${d.can_update ? d.latest_version_id || "" : d.current_version_id || ""}">Open</button>${d.my_pending_signature ? `<button class="sm sec" type="button" data-sign="${d.latest_version_id}">Sign</button>` : ""}${d.can_update ? `<button class="sm sec" type="button" data-update="${d.id}">Replace file</button>` : ""}${chair() ? `<button class="sm" type="button" data-r="${d.id}">Request update</button>` : ""}`;
   target.className = "files" + (viewMode === "grid" ? " grid" : "");
   target.innerHTML = !rows.length ? `<p class="muted empty">No documents match. Try clearing a filter.</p>` : viewMode === "grid"
-    ? rows.map(d => `<div class="fcard" data-v="${d.id}" data-updateable="${d.can_update}"><div class="thumb">${fileIcon(d.document_type)}</div><div class="fmeta"><b>${esc(d.title)}</b><small>${esc(d.category)} · ${esc(d.school_year)}</small>${badge(d.latest_status)}</div></div>`).join("")
+    ? rows.map(d => `<div class="fcard" data-v="${d.id}" data-updateable="${d.can_update}"><div class="thumb">${fileIcon(d.document_type)}</div><div class="fmeta"><b>${esc(d.title)}</b><small>${esc(d.category)} · ${esc(d.school_year)}</small>${statusTag(d)}<small>${pending(d) && d.sig_total ? `${d.sig_done}/${d.sig_total} signatories signed` : ""}</small><div class="acts cardacts">${acts(d)}</div></div></div>`).join("")
     : `<div class="frow fhead"><span></span><span>Name</span><span>Category</span><span>Course</span><span>Year / Sem</span><span>Status</span><span></span></div>` +
-      rows.map(d => `<div class="frow" data-v="${d.id}">${fileIcon(d.document_type)}<span class="fname">${esc(d.title)}<small>${esc(d.document_type)} · v${d.latest_version}</small></span><span>${esc(d.category)}</span><span>${esc(d.course || "—")}</span><span>${esc(d.school_year)} · ${esc(d.semester)}</span><span>${badge(d.latest_status)}</span><span class="acts">${acts(d)}</span></div>`).join("");
+      rows.map(d => `<div class="frow" data-v="${d.id}" data-updateable="${d.can_update}">${fileIcon(d.document_type)}<span class="fname">${esc(d.title)}<small>${esc(d.document_type)} · v${d.latest_version}</small></span><span>${esc(d.category)}</span><span>${esc(d.course || "—")}</span><span>${esc(d.school_year)} · ${esc(d.semester)}</span><span>${statusTag(d)}${pending(d) && d.sig_total ? `<small class="muted">${d.sig_done}/${d.sig_total} signatories signed</small>` : ""}</span><span class="acts">${acts(d)}</span></div>`).join("");
   target.querySelectorAll("[data-v]").forEach(r => r.onclick = run(() => versionsDialog(
     +r.dataset.v, () => docsTable(el, target), r.dataset.updateable === "true"
   )));
-  target.querySelectorAll("[data-dl]").forEach(b => b.onclick = e => { e.stopPropagation(); location.href = `/api/documents/${b.dataset.dl}/download`; });
+  target.querySelectorAll("[data-open]").forEach(b => b.onclick = e => { e.stopPropagation(); if (b.dataset.open) location.hash = "view/" + b.dataset.open; });
+  target.querySelectorAll("[data-status]").forEach(select => {
+    select.onclick = e => e.stopPropagation();
+    select.onchange = async e => {
+      e.stopPropagation();
+      const versionId = select.dataset.status, next = select.value;
+      select.value = "Pending Review";
+      if (next === "Pending Review") return;
+      if (next === "Current Approved Version") {
+        try {
+          await api(`/api/versions/${versionId}/approve`, { method: "POST" });
+          toast("Approved — now the current version.");
+          route();
+        } catch (error) { toast(error.message, true); }
+      } else {
+        modal(`<h3>Reject document</h3><label>Revision remarks (required)<textarea name="remarks" required></textarea></label>`,
+          async values => {
+            await api(`/api/versions/${versionId}/reject`, { json: values });
+            toast("Returned to uploader.");
+            route();
+          });
+      }
+    };
+  });
+  target.querySelectorAll("[data-sg]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    run(async () => {
+      const users = (await api("/api/admin/users")).filter(u => u.is_active && u.role !== "external_evaluator");
+      modal(`<h3>Add required signatory</h3><label>Signer<select name="signer_id">${opts(users, "id", "full_name")}</select></label>`,
+        async values => { await api(`/api/versions/${b.dataset.sg}/signatories`, { json: values }); toast("Signatory added."); route(); });
+    })();
+  });
+  target.querySelectorAll("[data-sign]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    run(async () => { await api(`/api/versions/${b.dataset.sign}/sign`, { method: "POST" }); toast("Signed."); route(); })();
+  });
   target.querySelectorAll("[data-update]").forEach(b => b.onclick = run(async e => {
     e.stopPropagation();
     await versionsDialog(+b.dataset.update, () => docsTable(el, target), true);
@@ -172,7 +211,7 @@ VIEWS.repository = async el => {   // 3.1 #3
 
 async function versionsDialog(id, after, canUpdate) {   // 3.1 #4 version history
   const v = await api(`/api/documents/${id}/versions`);
-  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td>${x.file_available ? `<a class="button-link" href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a>` : `<span class="muted">File no longer retained</span>`}</td></tr>`))}
+  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td>${x.file_available ? `<a class="button-link" href="#view/${x.id}" onclick="document.getElementById('dlg').close()">Open</a> <a class="button-link" href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a>` : `<span class="muted">File no longer retained</span>`}</td></tr>`))}
     ${canUpdate ? `<h3>Replace uploaded file</h3><p class="muted">The replacement is submitted as Pending Review. The current approved version, if any, remains active until approval.</p><input type="file" name="file" id="nv">` : ""}`);
   if ($("#nv")) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Submit replacement for review"; b.onclick = run(async () => {
     const fd = new FormData(); fd.append("file", $("#nv").files[0] || ""); await api(`/api/documents/${id}/versions`, { method: "POST", body: fd }); toast("Uploaded — pending review."); d.close(); after?.(); }); $("#nv").after(b); }
@@ -250,24 +289,6 @@ VIEWS.upload = async el => {
       : `Uploaded as a new document (#${r.document_id}) for review.`);
     e.target.reset();
   });
-};
-
-VIEWS.approvals = async el => {   // 3.1 #5
-  const sigs = await api("/api/my-signatures");
-  let html = `<h2>Approval and Signatories</h2>`;
-  if (sigs.length) html += `<div class="panel"><h3>Waiting for your signature</h3>${table(["Document", "Version", ""], sigs.map(s => `<tr><td>${esc(s.title)}</td><td>v${s.version_no}</td><td><button class="sm" data-sign="${s.version_id}">Sign</button></td></tr>`))}</div>`;
-  if (chair()) {
-    const q = await api("/api/review-queue");
-    html += `<div class="panel"><h3>Review queue</h3>${table(["Document", "Ver", "Uploader", "Uploaded", "Signatures", "Actions"], q.map(r => `<tr><td>${esc(r.title)}</td><td>${r.version_no}</td><td>${esc(r.uploader)}</td><td>${esc(r.uploaded_at)}</td><td>${r.sig_done}/${r.sig_total}</td>
-      <td>${r.file_available ? `<a href="/api/documents/${r.document_id}/download?version_no=${r.version_no}"><button class="sm sec">Open</button></a> <button class="sm" data-ok="${r.version_id}">Approve</button> <button class="sm bad" data-no="${r.version_id}">Reject</button> <button class="sm sec" data-sg="${r.version_id}">+ Signatory</button>` : `<span class="muted">File no longer available</span>`}</td></tr>`))}</div>`;
-  } else if (!sigs.length) html += `<div class="panel muted">Your submissions are reviewed by the Department Chair. Check each document’s status in the Repository.</div>`;
-  el.innerHTML = html;
-  el.querySelectorAll("[data-sign]").forEach(b => b.onclick = run(async () => { await api(`/api/versions/${b.dataset.sign}/sign`, { method: "POST" }); toast("Signed."); route(); }));
-  el.querySelectorAll("[data-ok]").forEach(b => b.onclick = run(async () => { await api(`/api/versions/${b.dataset.ok}/approve`, { method: "POST" }); toast("Approved — now the current version."); route(); }));
-  el.querySelectorAll("[data-no]").forEach(b => b.onclick = () => modal(`<h3>Reject document</h3><label>Revision remarks (required)<textarea name="remarks" required></textarea></label>`,
-    async v => { await api(`/api/versions/${b.dataset.no}/reject`, { json: v }); toast("Returned to uploader."); route(); }));
-  el.querySelectorAll("[data-sg]").forEach(b => b.onclick = run(async () => { const us = (await api("/api/admin/users")).filter(u => u.is_active && u.role !== "external_evaluator");
-    modal(`<h3>Add required signatory</h3><label>Signer<select name="signer_id">${opts(us, "id", "full_name")}</select></label>`, async v => { await api(`/api/versions/${b.dataset.sg}/signatories`, { json: v }); toast("Signatory added."); route(); }); }));
 };
 
 VIEWS.requirements = async el => {   // 3.1 #6

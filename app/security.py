@@ -70,11 +70,11 @@ PERMISSIONS = {
         "repo.view", "repo.upload", "repo.review", "repo.request_revision",
         "requirements.view", "requirements.manage", "faculty.view", "faculty.manage",
         "dashboard.view", "reports.generate", "admin.users", "admin.backup",
-        "access_requests.decide",
+        "access_requests.decide", "annotate.view", "annotate.add",
     },
     "faculty": {
         "repo.view", "repo.upload", "requirements.view",
-        "faculty.view_own", "faculty.manage_own", "dashboard.view",
+        "faculty.view_own", "faculty.manage_own", "dashboard.view", "annotate.view", "annotate.add",
     },
     "external_evaluator": {"repo.view_approved_only"},
 }

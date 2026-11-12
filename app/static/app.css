@@ -253,6 +253,11 @@ dialog{
   background:color-mix(in srgb,#e3ad18 17%,var(--card));
   border:1px solid color-mix(in srgb,#c99712 38%,var(--line));
 }
+.status-edit{
+  color:var(--warn);
+  background:color-mix(in srgb,#e3ad18 17%,var(--card));
+  border:1px solid color-mix(in srgb,#c99712 38%,var(--line));
+}
 .badge.b-bad{
   color:var(--bad);
   background:color-mix(in srgb,var(--bad) 13%,var(--card));
@@ -260,6 +265,11 @@ dialog{
 }
 @media(prefers-color-scheme:dark){
   .badge.b-warn{
+    color:#f4d35e;
+    background:color-mix(in srgb,#f4d35e 16%,var(--card));
+    border-color:color-mix(in srgb,#f4d35e 36%,var(--line));
+  }
+  .status-edit{
     color:#f4d35e;
     background:color-mix(in srgb,#f4d35e 16%,var(--card));
     border-color:color-mix(in srgb,#f4d35e 36%,var(--line));

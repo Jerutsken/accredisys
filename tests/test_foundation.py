@@ -505,9 +505,35 @@ class WorkflowTests(Base):
 
     def test_search_filters(self):  # FR-05
         f = self.login("f1@t")
-        self.upload(f, "Intro to IS Syllabus"); self.upload(f, "Exam Set")
-        self.assertEqual(len(f.get("/api/documents?q=Exam").get_json()), 1)
+        self.upload(f, "Intro to IS Syllabus"); uploaded = self.upload(f, "Exam Set")
+        exams = f.get("/api/documents?q=Exam").get_json()
+        self.assertEqual(len(exams), 1)
+        self.assertEqual(exams[0]["latest_version_id"], uploaded.get_json()["version_id"])
         self.assertEqual(len(f.get("/api/documents?semester=1st&document_type=syllabus").get_json()), 2)
+
+    def test_repository_exposes_review_and_signatory_status(self):
+        faculty, signer, chair = self.login("f1@t"), self.login("f2@t"), self.login("chair@t")
+        uploaded = self.upload(faculty, "Review status").get_json()
+        did = uploaded["document_id"]
+        self.assertEqual(self.post(chair, f"/api/versions/{uploaded['version_id']}/approve").status_code, 200)
+        next_version = self.post(
+            faculty, f"/api/documents/{did}/versions",
+            data={"file": (io.BytesIO(b"pending update"), "update.pdf")},
+            content_type="multipart/form-data",
+        ).get_json()
+        vid = next_version["version_id"]
+        self.assertEqual(self.post(chair, f"/api/versions/{vid}/signatories", json={"signer_id": 3}).status_code, 201)
+
+        chair_doc = next(row for row in chair.get("/api/documents").get_json() if row["id"] == did)
+        signer_doc = next(row for row in signer.get("/api/documents").get_json() if row["id"] == did)
+        self.assertEqual(chair_doc["latest_status"], "Pending Review")
+        self.assertEqual((chair_doc["sig_total"], chair_doc["sig_done"]), (1, 0))
+        self.assertTrue(signer_doc["my_pending_signature"])
+
+        self.assertEqual(self.post(signer, f"/api/versions/{vid}/sign").status_code, 200)
+        signed_doc = next(row for row in signer.get("/api/documents").get_json() if row["id"] == did)
+        self.assertFalse(signed_doc["my_pending_signature"])
+        self.assertEqual(signed_doc["sig_done"], 1)
 
 
 if __name__ == "__main__":

@@ -193,3 +193,30 @@ CREATE TABLE IF NOT EXISTS backups (
 CREATE INDEX IF NOT EXISTS idx_docs_filter ON documents(category_id, course_id, school_year, semester, document_type);
 CREATE INDEX IF NOT EXISTS idx_docs_title ON documents(title);
 CREATE INDEX IF NOT EXISTS idx_versions_doc ON document_versions(document_id, version_no);
+
+-- Annotations are stored separately so the original version file remains unchanged.
+CREATE TABLE IF NOT EXISTS annotations (
+  id          INTEGER PRIMARY KEY,
+  version_id  INTEGER NOT NULL REFERENCES document_versions(id),
+  parent_id   INTEGER REFERENCES annotations(id) ON DELETE CASCADE,
+  page        INTEGER,
+  rects       TEXT,
+  quote       TEXT NOT NULL DEFAULT '',
+  comment     TEXT NOT NULL DEFAULT '',
+  author_id   INTEGER NOT NULL REFERENCES users(id),
+  resolved    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (parent_id IS NOT NULL OR (page IS NOT NULL AND rects IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_version ON annotations(version_id, page);
+
+CREATE TABLE IF NOT EXISTS version_previews (
+  version_id INTEGER PRIMARY KEY REFERENCES document_versions(id),
+  status     TEXT NOT NULL CHECK (status IN ('pending','ready','failed','unavailable')),
+  path       TEXT,
+  sha256     TEXT,
+  error      TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

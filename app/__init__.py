@@ -1,4 +1,4 @@
-import os
+import mimetypes, os
 from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, g, jsonify, request, session
@@ -24,12 +24,16 @@ def create_app(config: dict | None = None) -> Flask:
         ALLOWED_EXTENSIONS={"pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg", "txt"},
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         MAX_FAILED_LOGINS=5, LOCKOUT_MINUTES=15,
+        CONVERT_ENABLED=True, CONVERT_SYNC=False, CONVERT_TIMEOUT=120,
     )
     if config:
         app.config.update(config)
     for d in (Path(app.config["DATABASE"]).parent, app.config["UPLOAD_DIR"], app.config["BACKUP_DIR"]):
         Path(d).mkdir(parents=True, exist_ok=True)
+    mimetypes.add_type("text/javascript", ".mjs")
     db.init_app(app)
+    with app.app_context():
+        db.init_db()
 
     @app.before_request
     def load_user():
@@ -53,8 +57,8 @@ def create_app(config: dict | None = None) -> Flask:
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    from .blueprints import auth, repository, approvals, requirements, faculty, admin, dashboard, evaluator
-    for m in (auth, repository, approvals, requirements, faculty, admin, dashboard, evaluator):
+    from .blueprints import auth, repository, approvals, requirements, faculty, admin, dashboard, evaluator, annotations
+    for m in (auth, repository, approvals, requirements, faculty, admin, dashboard, evaluator, annotations):
         app.register_blueprint(m.bp)
 
     @app.get("/health")
@@ -76,6 +80,10 @@ def create_app(config: dict | None = None) -> Flask:
     @app.errorhandler(400)
     def bad(e):
         return jsonify(error=getattr(e, "description", "Bad request")), 400
+
+    @app.errorhandler(415)
+    def unsupported(e):
+        return jsonify(error="Preview is available for PDF files only."), 415
 
     @app.errorhandler(404)
     def nf(e):
