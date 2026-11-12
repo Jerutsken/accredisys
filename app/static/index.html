@@ -10,7 +10,11 @@
   <div class="card">
     <h1>IS ACCREDISYS</h1><p class="muted">Accreditation Compliance and Evidence Management</p>
     <form id="f-cred"><label>Email<input name="email" type="email" required autocomplete="username"></label>
-      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+      <label>Password<span class="password-field"><input id="login-password" name="password" type="password" required autocomplete="current-password">
+        <button id="password-toggle" class="password-toggle" type="button" aria-label="Show password" aria-controls="login-password" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle><path class="password-toggle-slash" d="m3 3 18 18"></path></svg>
+        </button>
+      </span></label>
       <button>Continue</button></form>
     <form id="f-mfa" class="hidden"><p>Enter the 6-digit code from your authenticator app.</p>
       <label>Verification code<input name="code" inputmode="numeric" maxlength="6" pattern="\d{6}" required autocomplete="one-time-code"></label>

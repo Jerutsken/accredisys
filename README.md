@@ -1,11 +1,12 @@
 # IS ACCREDISYS — Project Foundation
 
+
 Foundation codebase derived from the group's **SRS**, **SPMP**, and project notes
 (Information Systems Accreditation Compliance and Evidence Management System, UST CICS, 3ISC Group 4).
 
 ## Run
 ```bash
-pip install -r requirements.txt        # Flask only
+pip install -r requirements.txt        # Flask and QR code generation
 python seed.py                         # creates DB + SAMPLE data, prints demo TOTP secrets
 flask --app app run                    # http://127.0.0.1:5000
 python -m unittest discover -s tests -t .
@@ -13,13 +14,13 @@ python -m unittest discover -s tests -t .
 Set `ACCREDISYS_SECRET` in any real deployment. Use HTTPS (SRS 3.4).
 
 ## Stack decision (SPMP says "not yet confirmed")
-Python/Flask + SQLite, chosen for ₱0 cost (SPMP Table C-1) and zero extra dependencies.
+Python/Flask + SQLite, chosen for ₱0 cost (SPMP Table C-1) and lightweight dependencies.
 Schema is plain SQL, so moving to PostgreSQL/MySQL (SRS 3.3) is a small change. **Confirm with your adviser.**
 
 ## What is built vs. SRS
 | SRS item | Where | Status |
 |---|---|---|
-| FR-01, BR-6 password + authenticator (TOTP, RFC 6238) | `auth.py`, `security.py` | Done, tested vs RFC vector |
+| FR-01, BR-6 password + authenticator (TOTP, RFC 6238) | `auth.py`, `security.py` | Done, tested vs RFC vector; account creation shows a local QR code and one-time setup key |
 | FR-02, BR-1 RBAC | `security.PERMISSIONS` | Done (Chair, Faculty, Evaluator) |
 | FR-03/04 upload + metadata (FR-03.2) | `repository.py` | Done |
 | FR-05 search & filters | `repository.search` | Done |
@@ -35,7 +36,7 @@ Schema is plain SQL, so moving to PostgreSQL/MySQL (SRS 3.3) is a small change. 
 | Audit trail | `audit_log` | Done |
 
 ## Not yet built (next iterations)
-Web UI (SRS 3.1 screens), email notifications, QR rendering for TOTP enrolment, scheduled-backup job,
+Web UI (SRS 3.1 screens), email notifications, scheduled-backup job,
 encryption at rest, password reset, hosting/deploy config.
 
 ## Open questions from your documents (they affect design)

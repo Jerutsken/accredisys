@@ -1,3 +1,4 @@
 Flask>=3.0
+qrcode>=8.2
 # TOTP, password hashing, and CSRF are implemented with the standard library / Werkzeug,
 # so no extra packages are required for the foundation.

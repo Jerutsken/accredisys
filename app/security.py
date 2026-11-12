@@ -1,7 +1,11 @@
-"""Security primitives: TOTP (RFC 6238), CSRF, and RBAC. Standard library only."""
+"""Security primitives: TOTP (RFC 6238), CSRF, and RBAC."""
 import base64, hashlib, hmac, secrets, struct, time
+from io import BytesIO
 from functools import wraps
+from urllib.parse import quote, urlencode
 from flask import abort, g, redirect, request, session, url_for
+import qrcode
+from qrcode.image.svg import SvgPathImage
 
 
 # ---- TOTP (BR-6 / Account Security Policy) ----
@@ -30,7 +34,20 @@ def verify_totp(secret: str, code: str, window: int = 1) -> bool:
 
 
 def provisioning_uri(email: str, secret: str, issuer: str = "IS ACCREDISYS") -> str:
-    return f"otpauth://totp/{issuer}:{email}?secret={secret}&issuer={issuer}&digits=6&period=30"
+    label = f"{quote(issuer, safe='')}:{quote(email, safe='')}"
+    query = urlencode({"secret": secret, "issuer": issuer, "digits": 6, "period": 30})
+    return f"otpauth://totp/{label}?{query}"
+
+
+def totp_qr_data_uri(uri: str) -> str:
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=6, border=4)
+    qr.add_data(uri)
+    qr.make(fit=True)
+    image = qr.make_image(image_factory=SvgPathImage)
+    output = BytesIO()
+    image.save(output)
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
 
 
 # ---- CSRF ----

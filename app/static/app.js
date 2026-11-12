@@ -14,7 +14,7 @@ async function api(url, o = {}) {
 }
 function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.style.background = bad ? "var(--bad)" : ""; t.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add("hidden"), 3500); }
 const run = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
-const statusCls = s => ({ "Current Approved Version": "b-ok", "Completed": "b-ok", "Pending Review": "b-warn", "In Progress": "b-warn", "Requires Revision": "b-bad", "Missing Evidence": "b-bad" }[s] || "");
+const statusCls = s => ({ "Current Approved Version": "b-ok", "Completed": "b-ok", "Verified": "b-ok", "Pending Verification": "b-warn", "Expired": "b-bad", "Pending Review": "b-warn", "In Progress": "b-warn", "Requires Revision": "b-bad", "Missing Evidence": "b-bad" }[s] || "");
 const badge = s => `<span class="badge ${statusCls(s)}">${esc(s || "—")}</span>`;
 const opts = (rows, val, lbl, all) => (all ? `<option value="">${all}</option>` : "") + rows.map(r => `<option value="${esc(r[val])}">${esc(typeof lbl === "function" ? lbl(r) : r[lbl])}</option>`).join("");
 const table = (heads, rows) => `<div class="tablewrap"><table><thead><tr>${heads.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("") || `<tr><td colspan="${heads.length}" class="muted">Nothing to show.</td></tr>`}</tbody></table></div>`;
@@ -26,7 +26,14 @@ function modal(html, onSubmit) {
 }
 
 /* ---------- login (3.1 #1) ---------- */
-function showLogin() { $("#shell").classList.add("hidden"); $("#login").classList.remove("hidden"); $("#f-cred").classList.remove("hidden"); $("#f-mfa").classList.add("hidden"); $("#login-err").textContent = ""; }
+function setPasswordVisibility(visible) {
+  $("#login-password").type = visible ? "text" : "password";
+  $("#password-toggle").setAttribute("aria-label", visible ? "Hide password" : "Show password");
+  $("#password-toggle").setAttribute("aria-pressed", String(visible));
+  $(".password-toggle-slash").hidden = visible;
+}
+$("#password-toggle").onclick = () => setPasswordVisibility($("#login-password").type === "password");
+function showLogin() { setPasswordVisibility(false); $("#shell").classList.add("hidden"); $("#login").classList.remove("hidden"); $("#f-cred").classList.remove("hidden"); $("#f-mfa").classList.add("hidden"); $("#login-err").textContent = ""; }
 const lerr = m => $("#login-err").textContent = m;
 $("#f-cred").onsubmit = async e => {
   e.preventDefault(); lerr("");
@@ -49,6 +56,7 @@ $("#logout").onclick = run(async () => { await api("/logout", { method: "POST" }
 const SCREENS = {
   home: ["Home", ["dept_chair", "faculty"]],
   repository: ["Evidence Repository", ["dept_chair", "faculty", "external_evaluator"]],
+  certifications: ["Certification Repository", ["dept_chair", "faculty"]],
   upload: ["Upload", ["dept_chair", "faculty"]],
   approvals: ["Approvals", ["dept_chair", "faculty"]],
   requirements: ["Requirements", ["dept_chair", "faculty"]],
@@ -60,6 +68,7 @@ const SCREENS = {
 const ICONS = {
   home: "home",
   repository: "evidence-repository",
+  certifications: "certification-repository",
   upload: "upload",
   approvals: "approvals",
   requirements: "requirements",
@@ -98,18 +107,31 @@ VIEWS.home = async el => {   // 3.1 #2
   const [d, rr] = await Promise.all([api("/api/dashboard"), api("/api/revision-requests")]);
   el.innerHTML = `<h2>Welcome, ${esc(me.name)}</h2>
   <div class="grid"><div class="card stat"><b>${d.documents}</b>Documents</div><div class="card stat"><b>${d.completion_pct}%</b>Requirements completed</div>
-  <div class="card stat"><b>${d.review_queue}</b>Awaiting review</div><div class="card stat"><b>${rr.length}</b>Revision requests for you</div></div>
-  <div class="panel"><h3>Updates needing your attention</h3>${rr.length ? table(["Document", "Message"], rr.map(r => `<tr><td>#${r.document_id}</td><td>${esc(r.message)}</td></tr>`)) : "<p class='muted'>No pending correction requests.</p>"}</div>
+  <div class="card stat"><b>${d.review_queue}</b>Awaiting review</div><div class="card stat"><b>${rr.length}</b>Updates needing attention</div></div>
+  <div class="panel"><h3>Updates needing your attention</h3>${rr.length ? table(["Document", "Message"], rr.map(r => `<tr><td><a href="#repository" data-attention-doc="${r.document_id}">${esc(r.document_title)}</a></td><td>${esc(r.message)}</td></tr>`)) : "<p class='muted'>No pending correction requests.</p>"}</div>
   <div class="panel"><h3>Quick links</h3><div class="row"><button onclick="location.hash='repository'">Search documents</button><button onclick="location.hash='upload'">Upload a document</button><button onclick="location.hash='requirements'">View requirements</button></div></div>`;
+  el.querySelectorAll("[data-attention-doc]").forEach(link => link.onclick = e => {
+    e.preventDefault();
+    searchQ = "";
+    repositoryFocusDocId = Number(link.dataset.attentionDoc);
+    if (location.hash === "#repository") route();
+    else location.hash = "repository";
+  });
 };
 
-let viewMode = "list", searchQ = "";
+let viewMode = "list", searchQ = "", repositoryFocusDocId = null;
 const hue = t => [...(t || "?")].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
 const fileIcon = t => `<span class="fi" style="--h:${hue(t)}">${esc((t || "?")[0].toUpperCase())}</span>`;
 async function docsTable(el, target) {
   const f = new URLSearchParams(new FormData($("#flt", el)));
   [...f.keys()].forEach(k => !f.get(k) && f.delete(k));
   const rows = await api("/api/documents?" + f);
+  const focusDocId = repositoryFocusDocId;
+  if (focusDocId !== null) {
+    rows.sort((a, b) => Number(b.id === focusDocId) - Number(a.id === focusDocId));
+    repositoryFocusDocId = null;
+    el.scrollTop = 0;
+  }
   const acts = d => `<button class="sm" type="button" data-dl="${d.id}">Download</button>${chair() ? `<button class="sm" type="button" data-r="${d.id}">Request update</button>` : ""}`;
   target.className = "files" + (viewMode === "grid" ? " grid" : "");
   target.innerHTML = !rows.length ? `<p class="muted empty">No documents match. Try clearing a filter.</p>` : viewMode === "grid"
@@ -125,7 +147,7 @@ VIEWS.repository = async el => {   // 3.1 #3
   const sel = (n, label, inner) => `<select name="${n}" class="chip"><option value="">${label}</option>${inner}</select>`;
   el.innerHTML = `<div class="bar2"><h2>Evidence Repository</h2><div class="seg"><button data-m="list" class="${viewMode === "list" ? "on" : ""}" title="List view">☰</button><button data-m="grid" class="${viewMode === "grid" ? "on" : ""}" title="Grid view">▦</button></div></div>
   ${me.role === "external_evaluator" ? `<p class="muted">Read-only view: only documents approved for your access are listed.</p>` : ""}
-  <form id="repository-search" class="search repository-search"><span aria-hidden="true">🔍</span><input id="gsearch" value="${esc(searchQ)}" placeholder="Search in repository" aria-label="Search documents"><button type="submit">Search</button></form>
+  <form id="repository-search" class="search repository-search"><input id="gsearch" value="${esc(searchQ)}" placeholder="Search in repository" aria-label="Search documents"><button type="submit">Search</button></form>
   <form id="flt" class="chips"><input type="hidden" name="q" value="${esc(searchQ)}">
     ${sel("category_id", "Category", opts(meta.categories, "id", "name"))}${sel("course_id", "Course", opts(meta.courses, "id", "code"))}
     <input name="school_year" class="chip" placeholder="School year" size="10">${sel("semester", "Semester", "<option>1st</option><option>2nd</option><option>Summer</option>")}
@@ -142,11 +164,65 @@ VIEWS.repository = async el => {   // 3.1 #3
 
 async function versionsDialog(id, after) {   // 3.1 #4 version history
   const v = await api(`/api/documents/${id}/versions`);
-  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td><a href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a></td></tr>`))}
+  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td><a class="button-link" href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a></td></tr>`))}
     ${me.role !== "external_evaluator" ? `<h3>Upload a new version</h3><input type="file" name="file" id="nv">` : ""}`);
   if ($("#nv")) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Upload version"; b.onclick = run(async () => {
     const fd = new FormData(); fd.append("file", $("#nv").files[0] || ""); await api(`/api/documents/${id}/versions`, { method: "POST", body: fd }); toast("Uploaded — pending review."); d.close(); after?.(); }); $("#nv").after(b); }
 }
+/* ---------- Certification Repository (UI preview, sample data only) ---------- */
+const CERTS = [
+  { title: "Licensure Examination Certificate", faculty: "Dr. Maria Santos", type: "License", issuer: "Professional Regulation Commission", issued: "2019-03-14", status: "Verified" },
+  { title: "Certified Information Systems Auditor (CISA)", faculty: "Prof. Juan Dela Cruz", type: "Professional Certification", issuer: "ISACA", issued: "2022-06-20", status: "Verified" },
+  { title: "Outstanding Faculty Research Award", faculty: "Dr. Maria Santos", type: "Award", issuer: "University of Santo Tomas", issued: "2024-02-09", status: "Verified" },
+  { title: "AWS Certified Solutions Architect – Associate", faculty: "Engr. Ana Reyes", type: "Professional Certification", issuer: "Amazon Web Services", issued: "2023-09-05", status: "Pending Verification" },
+  { title: "Best Paper Award, International Conference on IS", faculty: "Prof. Paolo Garcia", type: "Award", issuer: "ICIS Organizing Committee", issued: "2025-11-18", status: "Pending Verification" },
+  { title: "Teaching Excellence Seminar Completion", faculty: "Dr. Liza Mendoza", type: "Training Certificate", issuer: "UST Center for Teaching Excellence", issued: "2021-07-30", status: "Verified" },
+  { title: "Project Management Professional (PMP)", faculty: "Prof. Juan Dela Cruz", type: "Professional Certification", issuer: "Project Management Institute", issued: "2020-01-15", status: "Expired" },
+  { title: "Data Privacy Compliance Training", faculty: "Engr. Ana Reyes", type: "Training Certificate", issuer: "National Privacy Commission", issued: "2025-04-22", status: "Verified" },
+];
+let certMode = "list";
+VIEWS.certifications = async el => {
+  const fmt = d => new Date(d + "T00:00:00").toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+  const uniq = k => [...new Set(CERTS.map(c => c[k]))].sort();
+  const years = [...new Set(CERTS.map(c => c.issued.slice(0, 4)))].sort().reverse();
+  const sel = (n, label, vals) => `<select name="${n}" class="chip" aria-label="Filter by ${label}"><option value="">${label}</option>${vals.map(v => `<option>${esc(v)}</option>`).join("")}</select>`;
+  el.innerHTML = `<div class="bar2"><h2>Certification Repository</h2>
+    <div class="row-tools"><button type="button" data-soon>＋ Upload certificate</button>
+    <div class="seg" role="group" aria-label="Change view"><button type="button" data-m="list" aria-pressed="${certMode === "list"}" class="${certMode === "list" ? "on" : ""}" title="List view" aria-label="List view">☰</button><button type="button" data-m="grid" aria-pressed="${certMode === "grid"}" class="${certMode === "grid" ? "on" : ""}" title="Grid view" aria-label="Grid view">▦</button></div></div></div>
+  <p class="muted">A compiled record of faculty official certifications, licenses, trainings, and awards.</p>
+  <form id="cert-search" class="search repository-search" role="search"><label for="cq" class="sr-only">Search certificates</label>
+    <input id="cq" placeholder="Search by title, faculty, or issuer" autocomplete="off"><button type="submit">Search</button></form>
+  <form id="cflt" class="chips" aria-label="Filter certificates">
+    ${sel("faculty", "Faculty", uniq("faculty"))}${sel("type", "Type", uniq("type"))}${sel("year", "Year issued", years)}${sel("status", "Status", ["Verified", "Pending Verification", "Expired"])}
+    <button type="reset" class="link" id="cclr">Clear filters</button></form>
+  <p id="ccount" class="muted" role="status" aria-live="polite"></p><div id="cdocs"></div>`;
+
+  const soon = root => root.querySelectorAll("[data-soon]").forEach(b => b.onclick = () => toast("This action is not available yet."));
+  const draw = () => {
+    const f = Object.fromEntries(new FormData($("#cflt", el))), q = $("#cq", el).value.trim().toLowerCase();
+    const rows = CERTS.filter(c => (!q || [c.title, c.faculty, c.issuer, c.type].join(" ").toLowerCase().includes(q))
+      && (!f.faculty || c.faculty === f.faculty) && (!f.type || c.type === f.type) && (!f.status || c.status === f.status) && (!f.year || c.issued.startsWith(f.year)));
+    $("#ccount", el).textContent = `${rows.length} of ${CERTS.length} certificates shown`;
+    const icon = c => `<span class="fi" aria-hidden="true" style="--h:${hue(c.type)}">${esc(c.type[0].toUpperCase())}</span>`;
+    const acts = c => `<button class="sm" type="button" data-soon aria-label="Download ${esc(c.title)}">Download</button>${c.status === "Pending Verification" && chair() ? `<button class="sm sec" type="button" data-soon aria-label="Verify ${esc(c.title)}">Verify</button>` : `<button class="sm sec" type="button" data-soon aria-label="View details of ${esc(c.title)}">Details</button>`}`;
+    const t = $("#cdocs", el);
+    t.className = "files certs" + (certMode === "grid" ? " grid" : "");
+    t.innerHTML = !rows.length ? `<p class="muted empty">No certificates match. Try clearing a filter.</p>`
+      : certMode === "grid"
+        ? rows.map(c => `<article class="fcard"><div class="thumb">${icon(c)}</div><div class="fmeta"><b>${esc(c.title)}</b><small>${esc(c.faculty)}</small><small>${esc(c.type)} · ${fmt(c.issued)}</small>${badge(c.status)}<div class="acts cardacts">${acts(c)}</div></div></article>`).join("")
+        : `<div role="table" aria-label="Faculty certifications and awards"><div role="row" class="frow fhead"><span role="columnheader" aria-label="Type icon"></span><span role="columnheader">Certificate</span><span role="columnheader">Faculty</span><span role="columnheader">Type</span><span role="columnheader">Date issued</span><span role="columnheader">Status</span><span role="columnheader" aria-label="Actions"></span></div>` +
+          rows.map(c => `<div role="row" class="frow">${icon(c)}<span role="cell" class="fname">${esc(c.title)}<small>${esc(c.issuer)}</small></span><span role="cell">${esc(c.faculty)}</span><span role="cell">${esc(c.type)}</span><span role="cell">${fmt(c.issued)}</span><span role="cell">${badge(c.status)}</span><span role="cell" class="acts">${acts(c)}</span></div>`).join("") + `</div>`;
+    soon(t);
+  };
+  soon(el);
+  $("#cert-search", el).onsubmit = e => { e.preventDefault(); draw(); };
+  $("#cq", el).oninput = draw;
+  $("#cflt", el).onchange = draw; $("#cflt", el).onsubmit = e => e.preventDefault();
+  $("#cflt", el).onreset = () => { $("#cq", el).value = ""; setTimeout(draw); };
+  el.querySelectorAll("[data-m]").forEach(b => b.onclick = () => { certMode = b.dataset.m; route(); });
+  draw();
+};
+
 VIEWS.upload = async el => {
   el.innerHTML = `<h2>Upload Document</h2><form id="up" class="panel"><div class="row">
     <label>Title*<input name="title" required></label><label>Document type*<select name="document_type" required><option value="" disabled selected>Select document type</option><option value="syllabus">Syllabus</option><option value="exam">Exam</option><option value="credential">Credential</option></select></label></div>
@@ -181,11 +257,36 @@ VIEWS.approvals = async el => {   // 3.1 #5
 
 VIEWS.requirements = async el => {   // 3.1 #6
   const rows = await api("/api/requirements");
-  const docs = await api("/api/documents");
-  el.innerHTML = `<h2>Accreditation Requirement Tracking</h2><div class="panel">${table(["Body", "Code", "Requirement", "Status", "Evidence", ""], rows.map(r => `<tr><td>${esc(r.body)}</td><td>${esc(r.code)}</td><td>${esc(r.description)}</td><td>${badge(r.status)}</td><td>${r.evidence_count}</td><td><button class="sm sec" data-l="${r.id}">Link evidence</button></td></tr>`))}</div>
+  el.innerHTML = `<h2>Accreditation Requirement Tracking</h2><div class="panel">${table(["Body", "Code", "Requirement", "Status", "Evidence", ""], rows.map(r => `<tr><td>${esc(r.body)}</td><td>${esc(r.code)}</td><td>${esc(r.description)}</td><td>${badge(r.status)}</td><td>${r.evidence_count}</td><td><button class="sm sec" data-e="${r.id}">Manage evidence</button> <button class="sm sec" data-l="${r.id}">Link evidence</button></td></tr>`))}</div>
   ${chair() ? `<form id="nr" class="panel"><h3>Add requirement</h3><div class="row"><label>Accrediting body<input name="body" required placeholder="PAASCU"></label><label>Code<input name="code" required></label><label>Description<input name="description" required></label><button>Add</button></div></form>` : ""}`;
-  el.querySelectorAll("[data-l]").forEach(b => b.onclick = () => modal(`<h3>Link evidence document</h3><label>Document<select name="document_id">${opts(docs, "id", d => `${d.title} (v${d.latest_version})`)}</select></label>`,
-    async v => { await api(`/api/requirements/${b.dataset.l}/evidence`, { json: v }); toast("Evidence linked."); route(); }));
+  el.querySelectorAll("[data-e]").forEach(b => b.onclick = run(async () => {
+    const rid = b.dataset.e;
+    const linked = await api(`/api/requirements/${rid}/evidence`);
+    const options = await api(`/api/requirements/${rid}/evidence/options`);
+    const linkedIds = new Set(linked.map(d => d.id));
+    const available = options.filter(d => !linkedIds.has(d.id));
+    const dialog = modal(`<h3>Manage linked evidence</h3>${linked.length
+      ? table(["Document", "Replace with", "Actions"], linked.map(d => `<tr data-evidence-row="${d.id}"><td>${esc(d.title)}</td><td><select aria-label="Replacement document"><option value="">Select document</option>${opts(available, "id", x => `${x.title} (v${x.latest_version})`)}</select></td><td><button class="sm" type="button" data-replace="${d.id}">Replace</button> <button class="sm bad" type="button" data-unlink="${d.id}">Remove</button></td></tr>`))
+      : "<p class='muted'>No linked documents available to manage.</p>"}`);
+    dialog.querySelectorAll("[data-replace]").forEach(button => button.onclick = run(async () => {
+      const documentId = $("select", button.closest("tr")).value;
+      if (!documentId) return toast("Select a replacement document.", true);
+      await api(`/api/requirements/${rid}/evidence/${button.dataset.replace}`, {
+        method: "PUT", json: { document_id: documentId },
+      });
+      dialog.close(); toast("Evidence replaced."); route();
+    }));
+    dialog.querySelectorAll("[data-unlink]").forEach(button => button.onclick = run(async () => {
+      if (!confirm("Remove this document from the requirement?")) return;
+      await api(`/api/requirements/${rid}/evidence/${button.dataset.unlink}`, { method: "DELETE" });
+      dialog.close(); toast("Evidence removed."); route();
+    }));
+  }));
+  el.querySelectorAll("[data-l]").forEach(b => b.onclick = run(async () => {
+    const docs = await api(`/api/requirements/${b.dataset.l}/evidence/options`);
+    modal(`<h3>Link evidence document</h3><label>Document<select name="document_id">${opts(docs, "id", d => `${d.title} (v${d.latest_version})`)}</select></label>`,
+      async v => { await api(`/api/requirements/${b.dataset.l}/evidence`, { json: v }); toast("Evidence linked."); route(); });
+  }));
   if ($("#nr", el)) $("#nr", el).onsubmit = run(async e => { e.preventDefault(); await api("/api/requirements", { json: Object.fromEntries(new FormData(e.target)) }); toast("Requirement added."); route(); });
 };
 
@@ -235,7 +336,9 @@ VIEWS.admin = async el => {   // 3.1 #9
   $("#bk", el).onclick = run(async () => { await api("/api/admin/backups", { method: "POST" }); toast("Backup created."); route(); });
   el.querySelectorAll("[data-rs]").forEach(b => b.onclick = run(async () => { if (!confirm("Restore this backup? Current data is snapshotted first, then replaced.")) return; await api(`/api/admin/backups/${b.dataset.rs}/restore`, { method: "POST" }); toast("Restored."); route(); }));
   $("#nu", el).onsubmit = run(async e => { e.preventDefault(); const r = await api("/api/admin/users", { json: Object.fromEntries(new FormData(e.target)) });
-    modal(`<h3>Account created</h3><p>Give this one-time authenticator setup link to the user (enter it in an authenticator app, or render it as a QR code). It is shown only once.</p><textarea readonly rows="4">${esc(r.totp_uri)}</textarea>`); route(); });
+    const dialog = modal(`<h3>Account created</h3><p>Scan this QR code with the user’s authenticator app, or enter the setup key manually. This key is shown only once.</p><img class="totp-qr" src="${esc(r.totp_qr)}" alt="Authenticator setup QR code"><label>Google Authenticator setup key<input id="totp-secret" value="${esc(r.totp_secret)}" readonly></label><button class="sm sec" type="button" id="copy-totp">Copy setup key</button>`);
+    $("#copy-totp", dialog).onclick = run(async () => { await navigator.clipboard.writeText(r.totp_secret); toast("Setup key copied."); });
+    route(); });
 };
 
 /* ---------- boot ---------- */

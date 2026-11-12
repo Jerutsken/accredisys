@@ -97,19 +97,34 @@ def request_revision(doc_id):
 @bp.get("/revision-requests")
 @login_required
 def my_requests():
-    rows = get_db().execute("SELECT * FROM revision_requests WHERE assigned_to=? AND resolved=0", (g.user["id"],)).fetchall()
+    rows = get_db().execute(
+        "SELECT r.document_id, d.title AS document_title, r.message "
+        "FROM revision_requests r JOIN documents d ON d.id=r.document_id "
+        "WHERE r.assigned_to=? AND r.resolved=0 "
+        "UNION ALL "
+        "SELECT d.id AS document_id, d.title AS document_title, "
+        "'Version ' || v.version_no || ' rejected: ' || v.remarks AS message "
+        "FROM document_versions v JOIN documents d ON d.id=v.document_id "
+        "WHERE v.uploaded_by=? AND v.status='Requires Revision' "
+        "AND v.version_no=(SELECT MAX(latest.version_no) FROM document_versions latest "
+        "WHERE latest.document_id=v.document_id) "
+        "ORDER BY document_title",
+        (g.user["id"], g.user["id"])).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
 def _refresh_requirements(db, doc_id):
     """Approving evidence updates linked requirement completion (use case: Review and approve documents)."""
     for r in db.execute("SELECT requirement_id FROM requirement_evidence WHERE document_id=?", (doc_id,)).fetchall():
-        rid = r["requirement_id"]
-        total = db.execute("SELECT COUNT(*) FROM requirement_evidence WHERE requirement_id=?", (rid,)).fetchone()[0]
-        ok = db.execute("SELECT COUNT(*) FROM requirement_evidence e JOIN documents d ON d.id=e.document_id "
-                        "WHERE e.requirement_id=? AND d.current_version_id IS NOT NULL", (rid,)).fetchone()[0]
-        status = "Completed" if total and ok == total else ("In Progress" if total else "Missing Evidence")
-        db.execute("UPDATE requirements SET status=? WHERE id=?", (status, rid))
+        _refresh_requirement_status(db, r["requirement_id"])
+
+
+def _refresh_requirement_status(db, rid):
+    total = db.execute("SELECT COUNT(*) FROM requirement_evidence WHERE requirement_id=?", (rid,)).fetchone()[0]
+    ok = db.execute("SELECT COUNT(*) FROM requirement_evidence e JOIN documents d ON d.id=e.document_id "
+                    "WHERE e.requirement_id=? AND d.current_version_id IS NOT NULL", (rid,)).fetchone()[0]
+    status = "Completed" if total and ok == total else ("In Progress" if total else "Missing Evidence")
+    db.execute("UPDATE requirements SET status=? WHERE id=?", (status, rid))
 
 
 @bp.get("/my-signatures")

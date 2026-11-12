@@ -146,9 +146,14 @@ def download(doc_id):
         row = db.execute("SELECT * FROM document_versions WHERE document_id=? AND version_no=?", (doc_id, vno)).fetchone()
     if not row:
         abort(404)
+    stored_path = Path(row["stored_path"])
+    if not stored_path.is_file():
+        stored_path = Path(current_app.config["UPLOAD_DIR"]) / stored_path.name
+    if not stored_path.is_file():
+        abort(404, "Document file is missing.")
     audit("document.download", "document", doc_id, {"version": row["version_no"]})
     db.commit()
-    return send_file(row["stored_path"], download_name=row["original_name"], as_attachment=True)
+    return send_file(stored_path, download_name=row["original_name"], as_attachment=True)
 
 
 @bp.get("/meta")

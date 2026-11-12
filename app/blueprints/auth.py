@@ -32,6 +32,13 @@ def login():
         db.execute("UPDATE users SET failed_logins=?, locked_until=? WHERE id=?", (n, lock, u["id"]))
         db.commit()
         return generic
+    if current_app.config["DISABLE_TOTP"]:
+        session.clear()
+        session["uid"], session["mfa_ok"] = u["id"], True
+        g.user = u
+        audit("login", "user", u["id"])
+        db.commit()
+        return jsonify(ok=True, role=u["role"], csrf=csrf_token())
     # Step 1 passed; session is NOT authenticated until MFA succeeds (BR-6).
     session.clear()
     session["pending_uid"] = u["id"]

@@ -1,4 +1,6 @@
-import io, os, tempfile, unittest
+import base64, io, os, tempfile, unittest
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from werkzeug.security import generate_password_hash
 from app import create_app
 from app.db import init_db, get_db
@@ -55,6 +57,14 @@ class AuthTests(Base):
         c.post("/login", json={"email": "chair@t", "password": PW})
         self.assertEqual(c.get("/api/dashboard").status_code, 401)  
 
+    def test_totp_can_be_disabled_for_local_demo(self):
+        self.app.config["DISABLE_TOTP"] = True
+        c = self.app.test_client()
+        r = c.post("/login", json={"email": "chair@t", "password": PW})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(c.get("/api/dashboard").status_code, 200)
+
     def test_wrong_code_rejected(self):
         c = self.app.test_client()
         c.post("/login", json={"email": "chair@t", "password": PW})
@@ -69,6 +79,23 @@ class AuthTests(Base):
     def test_csrf_enforced(self):
         c = self.login("chair@t")
         self.assertEqual(c.post("/logout").status_code, 400)
+
+    def test_create_user_returns_local_totp_qr_and_secret(self):
+        chair = self.login("chair@t")
+        response = self.post(chair, "/api/admin/users", json={
+            "email": "new.user+test@example.com",
+            "full_name": "New User",
+            "password": PW,
+            "role": "faculty",
+        })
+        self.assertEqual(response.status_code, 201)
+        data = response.get_json()
+        self.assertRegex(data["totp_secret"], r"^[A-Z2-7]+$")
+        self.assertEqual(parse_qs(urlparse(data["totp_uri"]).query)["secret"], [data["totp_secret"]])
+        self.assertTrue(data["totp_qr"].startswith("data:image/svg+xml;base64,"))
+        svg = base64.b64decode(data["totp_qr"].split(",", 1)[1])
+        self.assertIn(b"<svg", svg)
+        self.assertIn(b"<path", svg)
 
 
 class WorkflowTests(Base):
@@ -96,6 +123,58 @@ class WorkflowTests(Base):
         r = self.post(f2, f"/api/documents/{did}/versions", data={"file": (io.BytesIO(b"x"), "x.pdf")}, content_type="multipart/form-data")
         self.assertEqual(r.status_code, 403)
 
+    def test_revision_requests_include_document_title(self):
+        f, ch = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(f, "Named syllabus").get_json()["document_id"]
+        response = self.post(ch, f"/api/documents/{did}/revision-requests",
+                             json={"message": "Please update the course outline."})
+        self.assertEqual(response.status_code, 201)
+        requests = f.get("/api/revision-requests").get_json()
+        self.assertEqual(requests[0]["document_title"], "Named syllabus")
+
+    def test_rejected_latest_upload_appears_in_uploader_updates(self):
+        faculty, chair = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(faculty, "Rejected syllabus").get_json()["document_id"]
+        response = self.post(chair, "/api/versions/1/reject", json={"remarks": "Please correct the course outcomes."})
+        self.assertEqual(response.status_code, 200)
+
+        updates = faculty.get("/api/revision-requests").get_json()
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0]["document_id"], did)
+        self.assertEqual(updates[0]["document_title"], "Rejected syllabus")
+        self.assertIn("Please correct the course outcomes.", updates[0]["message"])
+        self.assertEqual(chair.get("/api/revision-requests").get_json(), [])
+
+        self.assertEqual(
+            self.post(faculty, f"/api/documents/{did}/versions",
+                      data={"file": (io.BytesIO(b"updated"), "updated.pdf")},
+                      content_type="multipart/form-data").status_code,
+            201,
+        )
+        self.assertEqual(faculty.get("/api/revision-requests").get_json(), [])
+
+    def test_download_uses_configured_upload_dir_for_stale_stored_path(self):
+        f, ch = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(f).get_json()["document_id"]
+        with self.app.app_context():
+            stored_path = Path(get_db().execute(
+                "SELECT stored_path FROM document_versions WHERE document_id=?", (did,)
+            ).fetchone()["stored_path"])
+            relocated_dir = Path(self.tmp) / "relocated-uploads"
+            relocated_dir.mkdir()
+            relocated_file = relocated_dir / stored_path.name
+            relocated_file.write_bytes(stored_path.read_bytes())
+            self.app.config["UPLOAD_DIR"] = str(relocated_dir)
+            stored_path.unlink()
+        try:
+            response = ch.get(f"/api/documents/{did}/download?version_no=1")
+        finally:
+            stored_path.write_bytes(relocated_file.read_bytes())
+        body = response.get_data()
+        response.close()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body, b"%PDF-1.4 hi")
+
     def test_requirement_completes_on_approval(self):
         f, ch = self.login("f1@t"), self.login("chair@t")
         did = self.upload(f).get_json()["document_id"]
@@ -103,6 +182,36 @@ class WorkflowTests(Base):
         self.assertEqual(self.login("chair@t").get("/api/requirements").get_json()[0]["status"], "In Progress")
         self.post(ch, "/api/versions/1/approve")
         self.assertEqual(ch.get("/api/requirements").get_json()[0]["status"], "Completed")
+
+    def test_requirement_evidence_can_be_replaced_and_removed(self):
+        f1, f2 = self.login("f1@t"), self.login("f2@t")
+        original = self.upload(f1, "Original evidence").get_json()["document_id"]
+        replacement = self.upload(f1, "Replacement evidence").get_json()["document_id"]
+        other_owner_doc = self.upload(f2, "Other faculty evidence").get_json()["document_id"]
+        self.post(f1, "/api/requirements/1/evidence", json={"document_id": original})
+
+        self.assertEqual(f1.get("/api/requirements/1/evidence").get_json()[0]["title"], "Original evidence")
+        options = f1.get("/api/requirements/1/evidence/options").get_json()
+        self.assertIn(replacement, [doc["id"] for doc in options])
+        self.assertNotIn(other_owner_doc, [doc["id"] for doc in options])
+        denied = f1.put(f"/api/requirements/1/evidence/{original}",
+                        json={"document_id": other_owner_doc},
+                        headers={"X-CSRF-Token": f1.csrf})
+        self.assertEqual(denied.status_code, 403)
+
+        replaced = f1.put(f"/api/requirements/1/evidence/{original}",
+                          json={"document_id": replacement},
+                          headers={"X-CSRF-Token": f1.csrf})
+        self.assertEqual(replaced.status_code, 200)
+        self.assertEqual(f1.get("/api/requirements/1/evidence").get_json()[0]["title"], "Replacement evidence")
+        self.assertEqual(f1.get("/api/requirements").get_json()[0]["status"], "In Progress")
+
+        removed = f1.delete(f"/api/requirements/1/evidence/{replacement}",
+                            headers={"X-CSRF-Token": f1.csrf})
+        self.assertEqual(removed.status_code, 200)
+        requirement = f1.get("/api/requirements").get_json()[0]
+        self.assertEqual(requirement["status"], "Missing Evidence")
+        self.assertEqual(requirement["evidence_count"], 0)
 
     def test_evaluator_sees_only_approved_and_granted(self):  # BR-10
         f, ch, ev = self.login("f1@t"), self.login("chair@t"), self.login("ev@t")

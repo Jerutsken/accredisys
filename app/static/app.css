@@ -16,11 +16,14 @@ nav a{display:flex;align-items:center;gap:14px;height:40px;padding:0 16px;border
 main{background:var(--card);border-radius:16px;margin:0 16px 16px 0;padding:16px 24px;min-height:0;overflow:auto}
 h2{margin:.2em 0 .6em;font-size:22px;font-weight:400}h3{margin:1em 0 .4em;font-weight:500}
 .panel,.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
-.login{min-height:100vh;display:grid;place-items:center;padding:16px}.login .card{width:100%;max-width:380px;text-align:center;border-radius:28px;padding:32px}.login form,.login label{text-align:left}.login h1{margin:.2em 0;font-weight:400}
+.login{min-height:100vh;display:grid;place-items:center;padding:16px;background:url("/static/loginbg.webp") center/cover no-repeat}.login .card{width:100%;max-width:380px;text-align:center;border-radius:28px;padding:32px}.login form,.login label{text-align:left}.login h1{margin:.2em 0;font-weight:400}
+.password-field{position:relative;display:block}.password-field input{padding-right:44px}.password-toggle{position:absolute;top:50%;right:4px;display:grid;place-items:center;width:34px;height:34px;padding:6px;transform:translateY(-50%);border-radius:50%;background:transparent;color:var(--muted)}.password-toggle:hover{background:var(--hover);filter:none}.password-toggle svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.password-toggle-slash[hidden]{display:none}
 label{display:block;margin:8px 0;font-size:12px;color:var(--muted)}
 input,select,textarea{display:block;width:100%;padding:9px 10px;margin-top:3px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font:inherit}input:focus,select:focus,textarea:focus{outline:2px solid var(--brand);border-color:transparent}
+select[name="document_type"]:invalid{color:var(--muted)}
 button{padding:8px 18px;border:0;border-radius:20px;background:var(--brand);color:var(--on);font:inherit;font-weight:500;cursor:pointer}button:hover{filter:brightness(1.1)}
 button.sec{background:var(--brand2);color:var(--text)}button.link{background:none;color:var(--brand);padding:4px 8px}button.bad{background:var(--bad);color:#fff}button.sm{padding:4px 12px;font-size:13px}
+.button-link{display:inline-block;padding:4px 12px;border-radius:20px;background:var(--brand2);color:var(--text);font-size:13px;font-weight:500;text-decoration:none;white-space:nowrap}.button-link:hover{filter:brightness(1.1)}
 .ib{width:36px;height:36px;padding:0;border-radius:50%;background:none;color:var(--muted);font-size:16px}.ib:hover{background:var(--hover);filter:none}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.row>*{flex:1 1 150px}.row>button{flex:0 0 auto}
 .tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;font-weight:500;color:var(--muted)}tbody tr:hover{background:var(--hover)}
@@ -42,6 +45,7 @@ button.sec{background:var(--brand2);color:var(--text)}button.link{background:non
 .fmeta{padding:10px 12px;display:flex;flex-direction:column;gap:4px}.fmeta small{color:var(--muted)}.empty{padding:32px;text-align:center}
 .toast{position:fixed;bottom:20px;left:24px;background:#323232;color:#fff;padding:12px 20px;border-radius:6px;z-index:9;box-shadow:0 3px 10px rgba(0,0,0,.4)}
 dialog{border:0;border-radius:24px;background:var(--card);color:var(--text);max-width:600px;width:92%;padding:20px 24px;box-shadow:0 8px 30px rgba(0,0,0,.35)}dialog::backdrop{background:rgba(0,0,0,.4)}
+.totp-qr{display:block;width:220px;height:220px;max-width:100%;margin:16px auto;image-rendering:pixelated;background:#fff}
 @media(max-width:860px){#shell{grid-template-columns:1fr}header{grid-column:1}.brandname{display:none}aside{display:none;position:fixed;top:64px;left:0;bottom:0;width:260px;background:var(--bg);z-index:6;box-shadow:2px 0 10px rgba(0,0,0,.3)}body.navopen aside{display:block}main{margin:0 8px 8px;padding:12px}
  .frow{grid-template-columns:40px minmax(0,1fr) max-content}.frow>*:nth-child(n+3):not(.acts){display:none}.fhead{display:none}.acts{opacity:1;flex-direction:column;align-items:stretch}}
 @media(min-width:861px){#burger{display:none}}
@@ -282,11 +286,6 @@ dialog{
   justify-content:flex-start;
   flex:0 1 700px;
   min-width:0;
-  padding:14px 20px;
-  border:1px solid rgba(248,238,229,.52);
-  border-radius:12px;
-  background:rgba(255,248,240,.06);
-  box-shadow:inset 0 0 0 4px rgba(255,248,240,.035),0 3px 12px rgba(0,0,0,.16);
 }
 .footer-mark{
   display:block;
@@ -322,11 +321,21 @@ dialog{
     min-height:0;
     padding:18px 16px;
   }
-  .footer-mark-frame{flex:0 1 auto;padding:12px}
+  .footer-mark-frame{flex:0 1 auto}
   .footer-mark{width:100%;max-height:86px}
   .footer-copy{max-width:none;padding:0;text-align:left}
 }
 @media(max-width:420px){
-  .footer-mark-frame{padding:9px}
   .footer-mark{max-height:68px}
 }
+
+
+/* ---------- Certification Repository ---------- */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.row-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.certs .frow,.certs .fcard{cursor:default}
+.certs .frow.fhead{cursor:default}
+.cardacts{justify-content:flex-start;flex-wrap:wrap;margin-top:6px}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.password-toggle:focus-visible{z-index:1}
+@media(max-width:860px){.certs .frow .fname small{display:block}}

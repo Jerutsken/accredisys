@@ -16,6 +16,7 @@ def create_app(config: dict | None = None) -> Flask:
     inst = Path(app.instance_path)
     app.config.update(
         SECRET_KEY=os.environ.get("ACCREDISYS_SECRET", "dev-only-change-me"),
+        DISABLE_TOTP=False,
         DATABASE=str(inst / "accredisys.sqlite"),
         UPLOAD_DIR=str(inst / "uploads"),
         BACKUP_DIR=str(inst / "backups"),

@@ -5,7 +5,7 @@ from pathlib import Path
 from flask import Blueprint, abort, current_app, g, jsonify, request
 from werkzeug.security import generate_password_hash
 from ..db import get_db, audit
-from ..security import permission_required, new_totp_secret, provisioning_uri
+from ..security import permission_required, new_totp_secret, provisioning_uri, totp_qr_data_uri
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -23,6 +23,8 @@ def create_user():
     if role == "external_evaluator":  # BR-10: temporary accounts only
         expires = (datetime.now(timezone.utc) + timedelta(days=int(d.get("valid_days", 14)))).replace(tzinfo=None).isoformat()
     secret = new_totp_secret()
+    uri = provisioning_uri(d["email"], secret)
+    qr_data_uri = totp_qr_data_uri(uri)
     db = get_db()
     try:
         uid = db.execute("INSERT INTO users (email, full_name, password_hash, role, totp_secret, expires_at) VALUES (?,?,?,?,?,?)",
@@ -33,8 +35,8 @@ def create_user():
         db.execute("INSERT INTO faculty_profiles (user_id) VALUES (?)", (uid,))
     audit("user.create", "user", uid, {"role": role})
     db.commit()
-    # One-time enrolment URI to render as a QR code in the authenticator app.
-    return jsonify(id=uid, totp_uri=provisioning_uri(d["email"], secret)), 201
+    # Return the one-time setup data only in the account-creation response.
+    return jsonify(id=uid, totp_secret=secret, totp_uri=uri, totp_qr=qr_data_uri), 201
 
 
 @bp.post("/users/<int:uid>/deactivate")
