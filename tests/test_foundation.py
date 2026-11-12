@@ -1,4 +1,4 @@
-import base64, io, os, tempfile, unittest
+import base64, io, os, sqlite3, tempfile, unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from werkzeug.security import generate_password_hash
@@ -40,10 +40,43 @@ class Base(unittest.TestCase):
         kw.setdefault("headers", {})["X-CSRF-Token"] = c.csrf
         return c.post(url, **kw)
 
+    def put(self, c, url, **kw):
+        kw.setdefault("headers", {})["X-CSRF-Token"] = c.csrf
+        return c.put(url, **kw)
+
     def upload(self, c, title="Syllabus"):
         return self.post(c, "/api/documents", data={"title": title, "category_id": 1, "school_year": "2026-2027", "semester": "1st",
                                                     "document_type": "syllabus", "file": (io.BytesIO(b"%PDF-1.4 hi"), "s.pdf")},
                          content_type="multipart/form-data")
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    def test_existing_faculty_profile_schema_is_migrated(self):
+        tmp = tempfile.mkdtemp()
+        database = Path(tmp) / "legacy.sqlite"
+        with sqlite3.connect(database) as db:
+            db.execute("CREATE TABLE courses (id INTEGER PRIMARY KEY, code TEXT, title TEXT)")
+            db.execute(
+                "CREATE TABLE faculty_profiles (id INTEGER PRIMARY KEY, user_id INTEGER UNIQUE, "
+                "employment_type TEXT NOT NULL DEFAULT 'Regular', highest_degree TEXT, specialization TEXT)"
+            )
+
+        app = create_app({
+            "DATABASE": str(database),
+            "UPLOAD_DIR": str(Path(tmp) / "uploads"),
+            "BACKUP_DIR": str(Path(tmp) / "backups"),
+        })
+        with app.app_context():
+            columns = {
+                row["name"] for row in get_db().execute("PRAGMA table_info(faculty_profiles)").fetchall()
+            }
+            self.assertTrue({
+                "photo_path", "address", "contact_number", "facebook_name",
+                "ust_email", "faculty_status", "date_started",
+            }.issubset(columns))
+            self.assertTrue(get_db().execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='faculty_courses'"
+            ).fetchone())
 
 
 class AuthTests(Base):
@@ -56,6 +89,12 @@ class AuthTests(Base):
         c = self.app.test_client()
         c.post("/login", json={"email": "chair@t", "password": PW})
         self.assertEqual(c.get("/api/dashboard").status_code, 401)  
+
+    def test_account_profile_includes_email(self):
+        chair = self.login("chair@t")
+        profile = chair.get("/me").get_json()
+        self.assertEqual(profile["email"], "chair@t")
+        self.assertEqual(profile["name"], "chair@t")
 
     def test_totp_can_be_disabled_for_local_demo(self):
         self.app.config["DISABLE_TOTP"] = True
@@ -99,6 +138,14 @@ class AuthTests(Base):
 
 
 class WorkflowTests(Base):
+    def version_path(self, document_id, version_no):
+        with self.app.app_context():
+            path = get_db().execute(
+                "SELECT stored_path FROM document_versions WHERE document_id=? AND version_no=?",
+                (document_id, version_no),
+            ).fetchone()["stored_path"]
+            return Path(path)
+
     def test_version_control_and_approval(self):  # BR-3, BR-4, BR-5
         f, ch = self.login("f1@t"), self.login("chair@t")
         did = self.upload(f).get_json()["document_id"]
@@ -116,12 +163,223 @@ class WorkflowTests(Base):
             with self.assertRaises(Exception):                                    # BR-5 DB-level
                 get_db().execute("DELETE FROM document_versions WHERE id=1")
 
+    def test_upload_with_exact_metadata_adds_version_to_existing_entry(self):
+        faculty = self.login("f1@t")
+        first = self.upload(faculty, "Same syllabus").get_json()
+        second = self.upload(faculty, "Same syllabus").get_json()
+
+        self.assertEqual(second["document_id"], first["document_id"])
+        self.assertEqual(second["version_no"], 2)
+        self.assertTrue(second["matched_existing"])
+        with self.app.app_context():
+            self.assertEqual(
+                get_db().execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                get_db().execute(
+                    "SELECT COUNT(*) FROM document_versions WHERE document_id=?",
+                    (first["document_id"],),
+                ).fetchone()[0],
+                2,
+            )
+
+    def test_upload_with_different_metadata_creates_new_entry(self):
+        faculty = self.login("f1@t")
+        first = self.upload(faculty, "Different semesters").get_json()
+        response = self.post(
+            faculty,
+            "/api/documents",
+            data={
+                "title": "Different semesters",
+                "category_id": 1,
+                "school_year": "2026-2027",
+                "semester": "2nd",
+                "document_type": "syllabus",
+                "file": (io.BytesIO(b"second semester"), "s2.pdf"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 201)
+        second = response.get_json()
+        self.assertNotEqual(second["document_id"], first["document_id"])
+        self.assertFalse(second["matched_existing"])
+
+    def test_upload_with_multiple_exact_matches_requires_explicit_selection(self):
+        faculty = self.login("f1@t")
+        first = self.upload(faculty, "Ambiguous syllabus").get_json()
+        with self.app.app_context():
+            db = get_db()
+            db.execute(
+                "INSERT INTO documents (title, category_id, school_year, semester, document_type, owner_id) "
+                "VALUES ('Ambiguous syllabus', 1, '2026-2027', '1st', 'syllabus', 2)"
+            )
+            db.commit()
+
+        response = self.upload(faculty, "Ambiguous syllabus")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Multiple documents match", response.get_json()["error"])
+        with self.app.app_context():
+            self.assertEqual(
+                get_db().execute("SELECT COUNT(*) FROM document_versions").fetchone()[0],
+                1,
+            )
+
+    def test_only_two_most_recent_approved_files_are_retained(self):
+        faculty, chair = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(faculty, "Approved history").get_json()["document_id"]
+        for version_no in (1, 2, 3):
+            if version_no > 1:
+                response = self.post(
+                    faculty, f"/api/documents/{did}/versions",
+                    data={"file": (io.BytesIO(f"v{version_no}".encode()), f"v{version_no}.pdf")},
+                    content_type="multipart/form-data",
+                )
+                self.assertEqual(response.status_code, 201)
+            self.assertEqual(self.post(chair, f"/api/versions/{version_no}/approve").status_code, 200)
+
+        self.assertFalse(self.version_path(did, 1).exists())
+        self.assertTrue(self.version_path(did, 2).exists())
+        self.assertTrue(self.version_path(did, 3).exists())
+        history = faculty.get(f"/api/documents/{did}/versions").get_json()
+        self.assertEqual([v["file_available"] for v in history], [True, True, False])
+        self.assertEqual(chair.get(f"/api/documents/{did}/download?version_no=1").status_code, 410)
+        download = chair.get(f"/api/documents/{did}/download?version_no=2")
+        self.assertEqual(download.status_code, 200)
+        download.close()
+
+    def test_only_latest_pending_upload_file_is_retained_and_reviewed(self):
+        faculty, chair = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(faculty, "Pending history").get_json()["document_id"]
+        for version_no in (2, 3):
+            response = self.post(
+                faculty, f"/api/documents/{did}/versions",
+                data={"file": (io.BytesIO(f"v{version_no}".encode()), f"v{version_no}.pdf")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 201)
+
+        self.assertFalse(self.version_path(did, 1).exists())
+        self.assertFalse(self.version_path(did, 2).exists())
+        self.assertTrue(self.version_path(did, 3).exists())
+        history = faculty.get(f"/api/documents/{did}/versions").get_json()
+        self.assertEqual([v["file_available"] for v in history], [True, False, False])
+        queue = chair.get("/api/review-queue").get_json()
+        self.assertEqual([(v["document_id"], v["version_no"]) for v in queue], [(did, 3)])
+        self.assertEqual(self.post(chair, "/api/versions/1/approve").status_code, 410)
+
+    def test_replacement_is_pending_until_approved_and_update_action_is_scoped(self):
+        faculty, other, chair = self.login("f1@t"), self.login("f2@t"), self.login("chair@t")
+        did = self.upload(faculty, "Replaceable document").get_json()["document_id"]
+        self.assertEqual(self.post(chair, "/api/versions/1/approve").status_code, 200)
+
+        own_doc = next(row for row in faculty.get("/api/documents").get_json() if row["id"] == did)
+        shared_doc = next(row for row in other.get("/api/documents").get_json() if row["id"] == did)
+        chair_doc = next(row for row in chair.get("/api/documents").get_json() if row["id"] == did)
+        self.assertTrue(own_doc["can_update"])
+        self.assertFalse(shared_doc["can_update"])
+        self.assertTrue(chair_doc["can_update"])
+
+        response = self.post(
+            faculty, f"/api/documents/{did}/versions",
+            data={"file": (io.BytesIO(b"replacement"), "replacement.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["status"], "Pending Review")
+        with self.app.app_context():
+            document = get_db().execute(
+                "SELECT current_version_id FROM documents WHERE id=?", (did,)
+            ).fetchone()
+            self.assertEqual(document["current_version_id"], 1)
+
+        self.assertEqual(self.post(chair, "/api/versions/2/approve").status_code, 200)
+        updated_doc = next(row for row in faculty.get("/api/documents").get_json() if row["id"] == did)
+        self.assertEqual(updated_doc["current_version_id"], 2)
+
+    def test_only_latest_rejected_upload_file_is_retained(self):
+        faculty, chair = self.login("f1@t"), self.login("chair@t")
+        did = self.upload(faculty, "Rejected history").get_json()["document_id"]
+        self.assertEqual(
+            self.post(chair, "/api/versions/1/reject", json={"remarks": "Update this."}).status_code,
+            200,
+        )
+        response = self.post(
+            faculty, f"/api/documents/{did}/versions",
+            data={"file": (io.BytesIO(b"v2"), "v2.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            self.post(chair, "/api/versions/2/reject", json={"remarks": "Try again."}).status_code,
+            200,
+        )
+
+        self.assertFalse(self.version_path(did, 1).exists())
+        self.assertTrue(self.version_path(did, 2).exists())
+        history = faculty.get(f"/api/documents/{did}/versions").get_json()
+        self.assertEqual([v["file_available"] for v in history], [True, False])
+
     def test_faculty_cannot_approve_or_touch_others_docs(self):
         f1, f2 = self.login("f1@t"), self.login("f2@t")
         did = self.upload(f1).get_json()["document_id"]
         self.assertEqual(self.post(f1, "/api/versions/1/approve").status_code, 403)
         r = self.post(f2, f"/api/documents/{did}/versions", data={"file": (io.BytesIO(b"x"), "x.pdf")}, content_type="multipart/form-data")
         self.assertEqual(r.status_code, 403)
+
+    def test_faculty_can_update_own_teaching_information_and_photo(self):
+        faculty, other, chair = self.login("f1@t"), self.login("f2@t"), self.login("chair@t")
+        with self.app.app_context():
+            db = get_db()
+            db.executemany(
+                "INSERT INTO courses (code, title) VALUES (?,?)",
+                [("IS201", "Systems Analysis"), ("IS202", "Database Design")],
+            )
+            profile_id = db.execute(
+                "SELECT id FROM faculty_profiles WHERE user_id=("
+                "SELECT id FROM users WHERE email='f1@t')"
+            ).fetchone()["id"]
+            course_ids = [r["id"] for r in db.execute(
+                "SELECT id FROM courses ORDER BY code"
+            ).fetchall()]
+            db.commit()
+
+        response = self.put(
+            faculty,
+            f"/api/faculty/{profile_id}/profile",
+            data={
+                "full_name": "Faculty One Updated",
+                "address": "123 Campus Road",
+                "contact_number": "+63 912 345 6789",
+                "facebook_name": "Faculty One",
+                "ust_email": "faculty.one@ust.edu.ph",
+                "faculty_status": "Part-time",
+                "date_started": "2022-08-01",
+                "course_ids": [str(course_id) for course_id in course_ids],
+                "photo": (io.BytesIO(b"\xff\xd8\xfffake-jpeg-data"), "faculty.jpg"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        profile = faculty.get("/api/faculty/me").get_json()
+        self.assertEqual(profile["profile"]["full_name"], "Faculty One Updated")
+        self.assertEqual(profile["profile"]["address"], "123 Campus Road")
+        self.assertEqual(profile["profile"]["faculty_status"], "Part-time")
+        self.assertEqual(profile["profile"]["date_started"], "2022-08-01")
+        self.assertTrue(profile["profile"]["has_photo"])
+        self.assertEqual([course["id"] for course in profile["courses"]], course_ids)
+        self.assertEqual(chair.get(f"/api/faculty/{profile_id}").get_json()["profile"]["ust_email"],
+                         "faculty.one@ust.edu.ph")
+
+        photo = faculty.get(f"/api/faculty/{profile_id}/photo")
+        self.assertEqual(photo.status_code, 200)
+        photo.close()
+        self.assertEqual(other.get(f"/api/faculty/{profile_id}").status_code, 403)
+        self.assertEqual(
+            self.put(other, f"/api/faculty/{profile_id}/profile", data={"full_name": "Intruder"}).status_code,
+            403,
+        )
 
     def test_revision_requests_include_document_title(self):
         f, ch = self.login("f1@t"), self.login("chair@t")

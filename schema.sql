@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- FR-10, BR-3, BR-4, BR-5: versions are append-only
+-- Version records remain append-only; older file contents may be pruned while audit history is kept.
 CREATE TABLE IF NOT EXISTS document_versions (
   id             INTEGER PRIMARY KEY,
   document_id    INTEGER NOT NULL REFERENCES documents(id),
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS document_versions (
   UNIQUE(document_id, version_no)
 );
 
--- BR-5: no UPDATE of file fields and no DELETE on versions
+-- Keep version records and file metadata immutable; retention removes file contents from disk only.
 CREATE TRIGGER IF NOT EXISTS trg_versions_no_delete
 BEFORE DELETE ON document_versions
 BEGIN SELECT RAISE(ABORT, 'BR-5: document versions cannot be deleted'); END;
@@ -113,7 +113,20 @@ CREATE TABLE IF NOT EXISTS faculty_profiles (
   user_id         INTEGER UNIQUE REFERENCES users(id),
   employment_type TEXT NOT NULL DEFAULT 'Regular' CHECK (employment_type IN ('Regular','Part-time')),
   highest_degree  TEXT,                          -- doctoral / masteral / pursuing (interview 10/8)
-  specialization  TEXT
+  specialization  TEXT,
+  photo_path      TEXT,
+  address         TEXT,
+  contact_number  TEXT,
+  facebook_name   TEXT,
+  ust_email       TEXT,
+  faculty_status  TEXT NOT NULL DEFAULT 'Full-time' CHECK (faculty_status IN ('Full-time','Part-time')),
+  date_started    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS faculty_courses (
+  faculty_id INTEGER NOT NULL REFERENCES faculty_profiles(id) ON DELETE CASCADE,
+  course_id  INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  PRIMARY KEY (faculty_id, course_id)
 );
 
 CREATE TABLE IF NOT EXISTS faculty_records (

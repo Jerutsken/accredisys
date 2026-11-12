@@ -13,6 +13,12 @@ python -m unittest discover -s tests -t .
 ```
 Set `ACCREDISYS_SECRET` in any real deployment. Use HTTPS (SRS 3.4).
 
+Version history records are retained, but file contents are kept only for the two
+most recent approved versions, the most recent pending upload, and the most
+recent rejected upload. Older entries remain visible in history as unavailable.
+Run `flask --app app prune-version-files` once to apply this policy to files
+already present in the database.
+
 ## Stack decision (SPMP says "not yet confirmed")
 Python/Flask + SQLite, chosen for ₱0 cost (SPMP Table C-1) and lightweight dependencies.
 Schema is plain SQL, so moving to PostgreSQL/MySQL (SRS 3.3) is a small change. **Confirm with your adviser.**
@@ -22,12 +28,12 @@ Schema is plain SQL, so moving to PostgreSQL/MySQL (SRS 3.3) is a small change. 
 |---|---|---|
 | FR-01, BR-6 password + authenticator (TOTP, RFC 6238) | `auth.py`, `security.py` | Done, tested vs RFC vector; account creation shows a local QR code and one-time setup key |
 | FR-02, BR-1 RBAC | `security.PERMISSIONS` | Done (Chair, Faculty, Evaluator) |
-| FR-03/04 upload + metadata (FR-03.2) | `repository.py` | Done |
+| FR-03/04 upload + metadata (FR-03.2) | `repository.py` | Done; exact metadata matches are uploaded as new versions, and owners/Chair can submit replacements from the repository |
 | FR-05 search & filters | `repository.search` | Done |
 | FR-10, BR-3/4/5 versioning, Pending Review, remarks, no overwrite/delete | `repository.py`, `approvals.py`, DB triggers | Done |
 | FR-07 approval + signatories | `approvals.py` | Done |
 | FR-06 requirement tracking, auto-status on approval | `requirements.py` | Done |
-| FR-08, BR-7 faculty profile/history, privacy scoping | `faculty.py` | Done (row-level) |
+| FR-08, BR-7 faculty profile/history, privacy scoping | `faculty.py` | Done (row-level); profile edits are in Profile and Faculty/Teaching Information is read-only |
 | FR-09 dashboard + CSV report | `dashboard.py` | Done (CSV; PDF later) |
 | FR-11, BR-8 backup/restore | `admin.py` | Done (call `make_backup()` from cron for scheduled) |
 | FR-12, BR-2 account lifecycle | `admin.py` | Done (soft deactivate) |

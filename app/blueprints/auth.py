@@ -76,4 +76,10 @@ def logout():
 @bp.get("/me")
 @login_required
 def me():
-    return jsonify(id=g.user["id"], name=g.user["full_name"], role=g.user["role"], csrf=csrf_token())
+    return jsonify(
+        id=g.user["id"],
+        name=g.user["full_name"],
+        email=g.user["email"],
+        role=g.user["role"],
+        csrf=csrf_token(),
+    )

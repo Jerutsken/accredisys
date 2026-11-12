@@ -1,7 +1,8 @@
 """FR-07 / BR-3 / BR-4: review workflow, signatories, revision requests."""
-from flask import Blueprint, abort, g, jsonify, request
+from flask import Blueprint, abort, current_app, g, jsonify, request
 from ..db import get_db, audit
 from ..security import permission_required, login_required
+from ..version_files import prune_version_files, version_file_path
 
 bp = Blueprint("approvals", __name__, url_prefix="/api")
 
@@ -10,12 +11,20 @@ bp = Blueprint("approvals", __name__, url_prefix="/api")
 @permission_required("repo.review")
 def queue():
     rows = get_db().execute(
-        "SELECT v.id AS version_id, v.version_no, d.id AS document_id, d.title, u.full_name AS uploader, v.uploaded_at, "
+        "SELECT v.id AS version_id, v.version_no, v.stored_path, d.id AS document_id, d.title, u.full_name AS uploader, v.uploaded_at, "
         "(SELECT COUNT(*) FROM signatories s WHERE s.version_id=v.id) AS sig_total, "
         "(SELECT COUNT(*) FROM signatories s WHERE s.version_id=v.id AND s.signed_at IS NOT NULL) AS sig_done "
         "FROM document_versions v JOIN documents d ON d.id=v.document_id JOIN users u ON u.id=v.uploaded_by "
-        "WHERE v.status='Pending Review' ORDER BY v.uploaded_at").fetchall()
-    return jsonify([dict(r) for r in rows])
+        "WHERE v.status='Pending Review' AND v.version_no=(SELECT MAX(latest.version_no) "
+        "FROM document_versions latest WHERE latest.document_id=v.document_id AND latest.status='Pending Review') "
+        "ORDER BY v.uploaded_at").fetchall()
+    queue = []
+    for row in rows:
+        item = dict(row)
+        item["file_available"] = version_file_path(row, current_app.config["UPLOAD_DIR"]) is not None
+        del item["stored_path"]
+        queue.append(item)
+    return jsonify(queue)
 
 
 @bp.post("/versions/<int:vid>/approve")
@@ -25,6 +34,8 @@ def approve(vid):
     v = db.execute("SELECT * FROM document_versions WHERE id=?", (vid,)).fetchone() or abort(404)
     if v["status"] != "Pending Review":
         abort(400, "Only versions pending review can be approved.")
+    if version_file_path(v, current_app.config["UPLOAD_DIR"]) is None:
+        abort(410, "This pending version's file is no longer available for review.")
     # FR-07: all designated signatories must have signed before approval
     unsigned = db.execute("SELECT COUNT(*) FROM signatories WHERE version_id=? AND signed_at IS NULL", (vid,)).fetchone()[0]
     if unsigned:
@@ -36,6 +47,7 @@ def approve(vid):
     _refresh_requirements(db, v["document_id"])
     audit("version.approve", "document_version", vid)
     db.commit()
+    prune_version_files(db, v["document_id"], current_app.config["UPLOAD_DIR"])
     return jsonify(status="Current Approved Version")
 
 
@@ -49,10 +61,13 @@ def reject(vid):
     v = db.execute("SELECT * FROM document_versions WHERE id=?", (vid,)).fetchone() or abort(404)
     if v["status"] != "Pending Review":
         abort(400, "Only versions pending review can be rejected.")
+    if version_file_path(v, current_app.config["UPLOAD_DIR"]) is None:
+        abort(410, "This pending version's file is no longer available for review.")
     db.execute("UPDATE document_versions SET status='Requires Revision', remarks=?, reviewed_by=?, reviewed_at=datetime('now') WHERE id=?",
                (remarks, g.user["id"], vid))
     audit("version.reject", "document_version", vid, {"remarks": remarks})
     db.commit()
+    prune_version_files(db, v["document_id"], current_app.config["UPLOAD_DIR"])
     return jsonify(status="Requires Revision", remarks=remarks)
 
 
@@ -132,5 +147,8 @@ def _refresh_requirement_status(db, rid):
 def my_signatures():
     rows = get_db().execute(
         "SELECT s.version_id, d.title, v.version_no FROM signatories s JOIN document_versions v ON v.id=s.version_id "
-        "JOIN documents d ON d.id=s.document_id WHERE s.signer_id=? AND s.signed_at IS NULL", (g.user["id"],)).fetchall()
+        "JOIN documents d ON d.id=s.document_id WHERE s.signer_id=? AND s.signed_at IS NULL "
+        "AND v.status='Pending Review' AND v.version_no=(SELECT MAX(latest.version_no) "
+        "FROM document_versions latest WHERE latest.document_id=v.document_id AND latest.status='Pending Review')",
+        (g.user["id"],)).fetchall()
     return jsonify([dict(r) for r in rows])

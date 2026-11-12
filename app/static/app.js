@@ -56,12 +56,13 @@ $("#logout").onclick = run(async () => { await api("/logout", { method: "POST" }
 const SCREENS = {
   home: ["Home", ["dept_chair", "faculty"]],
   repository: ["Evidence Repository", ["dept_chair", "faculty", "external_evaluator"]],
-  certifications: ["Certification Repository", ["dept_chair", "faculty"]],
   upload: ["Upload", ["dept_chair", "faculty"]],
   approvals: ["Approvals", ["dept_chair", "faculty"]],
   requirements: ["Requirements", ["dept_chair", "faculty"]],
-  faculty: ["Faculty Information", ["dept_chair", "faculty"]],
   dashboard: ["Compliance Dashboard", ["dept_chair", "faculty"]],
+  faculty: ["Faculty/Teaching Information", ["dept_chair", "faculty"]],
+  certifications: ["Certification Repository", ["dept_chair", "faculty"]],
+  profile: ["Profile", ["dept_chair", "faculty", "external_evaluator"]],
   access: ["Access Requests", ["external_evaluator"]],
   admin: ["Administration", ["dept_chair"]],
 };
@@ -74,6 +75,7 @@ const ICONS = {
   requirements: "requirements",
   faculty: "faculty-information",
   dashboard: "compliance-dashboard",
+  profile: "faculty-information",
   access: "evidence-repository",
   admin: "administration",
 };
@@ -132,14 +134,20 @@ async function docsTable(el, target) {
     repositoryFocusDocId = null;
     el.scrollTop = 0;
   }
-  const acts = d => `<button class="sm" type="button" data-dl="${d.id}">Download</button>${chair() ? `<button class="sm" type="button" data-r="${d.id}">Request update</button>` : ""}`;
+  const acts = d => `<button class="sm" type="button" data-dl="${d.id}">Download</button>${d.can_update ? `<button class="sm sec" type="button" data-update="${d.id}">Replace file</button>` : ""}${chair() ? `<button class="sm" type="button" data-r="${d.id}">Request update</button>` : ""}`;
   target.className = "files" + (viewMode === "grid" ? " grid" : "");
   target.innerHTML = !rows.length ? `<p class="muted empty">No documents match. Try clearing a filter.</p>` : viewMode === "grid"
-    ? rows.map(d => `<div class="fcard" data-v="${d.id}"><div class="thumb">${fileIcon(d.document_type)}</div><div class="fmeta"><b>${esc(d.title)}</b><small>${esc(d.category)} · ${esc(d.school_year)}</small>${badge(d.latest_status)}</div></div>`).join("")
+    ? rows.map(d => `<div class="fcard" data-v="${d.id}" data-updateable="${d.can_update}"><div class="thumb">${fileIcon(d.document_type)}</div><div class="fmeta"><b>${esc(d.title)}</b><small>${esc(d.category)} · ${esc(d.school_year)}</small>${badge(d.latest_status)}</div></div>`).join("")
     : `<div class="frow fhead"><span></span><span>Name</span><span>Category</span><span>Course</span><span>Year / Sem</span><span>Status</span><span></span></div>` +
       rows.map(d => `<div class="frow" data-v="${d.id}">${fileIcon(d.document_type)}<span class="fname">${esc(d.title)}<small>${esc(d.document_type)} · v${d.latest_version}</small></span><span>${esc(d.category)}</span><span>${esc(d.course || "—")}</span><span>${esc(d.school_year)} · ${esc(d.semester)}</span><span>${badge(d.latest_status)}</span><span class="acts">${acts(d)}</span></div>`).join("");
-  target.querySelectorAll("[data-v]").forEach(r => r.onclick = run(() => versionsDialog(+r.dataset.v, () => docsTable(el, target))));
+  target.querySelectorAll("[data-v]").forEach(r => r.onclick = run(() => versionsDialog(
+    +r.dataset.v, () => docsTable(el, target), r.dataset.updateable === "true"
+  )));
   target.querySelectorAll("[data-dl]").forEach(b => b.onclick = e => { e.stopPropagation(); location.href = `/api/documents/${b.dataset.dl}/download`; });
+  target.querySelectorAll("[data-update]").forEach(b => b.onclick = run(async e => {
+    e.stopPropagation();
+    await versionsDialog(+b.dataset.update, () => docsTable(el, target), true);
+  }));
   target.querySelectorAll("[data-r]").forEach(b => b.onclick = e => { e.stopPropagation(); modal(`<h3>Request update / correction</h3><label>Message to document owner<textarea name="message" required></textarea></label>`,
     async v => { await api(`/api/documents/${b.dataset.r}/revision-requests`, { json: v }); toast("Request sent."); }); });
 }
@@ -162,11 +170,11 @@ VIEWS.repository = async el => {   // 3.1 #3
   await go();
 };
 
-async function versionsDialog(id, after) {   // 3.1 #4 version history
+async function versionsDialog(id, after, canUpdate) {   // 3.1 #4 version history
   const v = await api(`/api/documents/${id}/versions`);
-  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td><a class="button-link" href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a></td></tr>`))}
-    ${me.role !== "external_evaluator" ? `<h3>Upload a new version</h3><input type="file" name="file" id="nv">` : ""}`);
-  if ($("#nv")) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Upload version"; b.onclick = run(async () => {
+  const d = modal(`<h3>Version history</h3>${table(["Ver", "File", "Status", "Uploaded", "Remarks", ""], v.map(x => `<tr><td>${x.version_no}</td><td>${esc(x.original_name)}</td><td>${badge(x.status)}</td><td>${esc(x.uploaded_at)}</td><td>${esc(x.remarks || "")}</td><td>${x.file_available ? `<a class="button-link" href="/api/documents/${id}/download?version_no=${x.version_no}">Download</a>` : `<span class="muted">File no longer retained</span>`}</td></tr>`))}
+    ${canUpdate ? `<h3>Replace uploaded file</h3><p class="muted">The replacement is submitted as Pending Review. The current approved version, if any, remains active until approval.</p><input type="file" name="file" id="nv">` : ""}`);
+  if ($("#nv")) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Submit replacement for review"; b.onclick = run(async () => {
     const fd = new FormData(); fd.append("file", $("#nv").files[0] || ""); await api(`/api/documents/${id}/versions`, { method: "POST", body: fd }); toast("Uploaded — pending review."); d.close(); after?.(); }); $("#nv").after(b); }
 }
 /* ---------- Certification Repository (UI preview, sample data only) ---------- */
@@ -233,8 +241,15 @@ VIEWS.upload = async el => {
     <label>Semester*<select name="semester"><option>1st</option><option>2nd</option><option>Summer</option></select></label></div>
     <label>File* (pdf, docx, xlsx, pptx, images; max 25 MB)<input type="file" name="file" required></label>
     <button>Upload for review</button></form>
-    <p class="muted">New uploads are set to “Pending Review”. Uploading a new version never overwrites earlier ones.</p>`;
-  $("#up").onsubmit = run(async e => { e.preventDefault(); const r = await api("/api/documents", { method: "POST", body: new FormData(e.target) }); toast(`Uploaded (document #${r.document_id}).`); e.target.reset(); });
+    <p class="muted">Uploads matching an existing document’s title, category, course, school year, semester, and type are added as a new version for review. Otherwise, a new repository entry is created. Version history is retained; files are kept only for the two latest approved versions, latest pending upload, and latest rejected upload.</p>`;
+  $("#up").onsubmit = run(async e => {
+    e.preventDefault();
+    const r = await api("/api/documents", { method: "POST", body: new FormData(e.target) });
+    toast(r.matched_existing
+      ? `Uploaded as version ${r.version_no} of document #${r.document_id} for review.`
+      : `Uploaded as a new document (#${r.document_id}) for review.`);
+    e.target.reset();
+  });
 };
 
 VIEWS.approvals = async el => {   // 3.1 #5
@@ -244,7 +259,7 @@ VIEWS.approvals = async el => {   // 3.1 #5
   if (chair()) {
     const q = await api("/api/review-queue");
     html += `<div class="panel"><h3>Review queue</h3>${table(["Document", "Ver", "Uploader", "Uploaded", "Signatures", "Actions"], q.map(r => `<tr><td>${esc(r.title)}</td><td>${r.version_no}</td><td>${esc(r.uploader)}</td><td>${esc(r.uploaded_at)}</td><td>${r.sig_done}/${r.sig_total}</td>
-      <td><a href="/api/documents/${r.document_id}/download?version_no=${r.version_no}"><button class="sm sec">Open</button></a> <button class="sm" data-ok="${r.version_id}">Approve</button> <button class="sm bad" data-no="${r.version_id}">Reject</button> <button class="sm sec" data-sg="${r.version_id}">+ Signatory</button></td></tr>`))}</div>`;
+      <td>${r.file_available ? `<a href="/api/documents/${r.document_id}/download?version_no=${r.version_no}"><button class="sm sec">Open</button></a> <button class="sm" data-ok="${r.version_id}">Approve</button> <button class="sm bad" data-no="${r.version_id}">Reject</button> <button class="sm sec" data-sg="${r.version_id}">+ Signatory</button>` : `<span class="muted">File no longer available</span>`}</td></tr>`))}</div>`;
   } else if (!sigs.length) html += `<div class="panel muted">Your submissions are reviewed by the Department Chair. Check each document’s status in the Repository.</div>`;
   el.innerHTML = html;
   el.querySelectorAll("[data-sign]").forEach(b => b.onclick = run(async () => { await api(`/api/versions/${b.dataset.sign}/sign`, { method: "POST" }); toast("Signed."); route(); }));
@@ -290,19 +305,94 @@ VIEWS.requirements = async el => {   // 3.1 #6
   if ($("#nr", el)) $("#nr", el).onsubmit = run(async e => { e.preventDefault(); await api("/api/requirements", { json: Object.fromEntries(new FormData(e.target)) }); toast("Requirement added."); route(); });
 };
 
+const facultyPhoto = (profile, id) => profile.has_photo
+  ? `<img class="faculty-photo" src="/api/faculty/${id}/photo" alt="2×2 faculty photo">`
+  : `<div class="faculty-photo faculty-photo-empty" role="img" aria-label="No faculty photo uploaded">2×2 photo</div>`;
+const facultySummary = d => {
+  const p = d.profile, courseNames = d.courses.map(c => `${c.code} — ${c.title}`);
+  return `<section class="panel faculty-summary"><h3>Faculty/Teaching Information</h3><div class="faculty-summary-body">${facultyPhoto(p, p.id)}<dl>
+    <dt>Full name</dt><dd>${esc(p.full_name)}</dd><dt>Address</dt><dd>${esc(p.address || "—")}</dd>
+    <dt>Contact number</dt><dd>${esc(p.contact_number || "—")}</dd><dt>Facebook name</dt><dd>${esc(p.facebook_name || "—")}</dd>
+    <dt>UST email</dt><dd>${esc(p.ust_email || "—")}</dd><dt>Faculty status</dt><dd>${esc(p.faculty_status)}</dd>
+    <dt>Date started/appointed</dt><dd>${esc(p.date_started || "—")}</dd><dt>Courses handled</dt><dd>${esc(courseNames.join(", ") || "—")}</dd>
+    <dt>Highest degree</dt><dd>${esc(p.highest_degree || "—")}</dd><dt>Specialization</dt><dd>${esc(p.specialization || "—")}</dd>
+    </dl></div></section>
+    <section class="panel"><h3>Faculty records</h3><p class="muted">${esc(p.faculty_status)} · ${esc(p.highest_degree || "degree not set")} ${p.specialization ? "· " + esc(p.specialization) : ""}</p>
+    ${table(["Kind", "Title", "Detail", "Year", "Scope"], d.records.map(r => `<tr><td>${esc(r.kind)}</td><td>${esc(r.title)}</td><td>${esc(r.detail || "")}</td><td>${esc(r.year || "")}</td><td>${esc(r.scope)}</td></tr>`))}</section>`;
+};
+
 VIEWS.faculty = async el => {   // 3.1 #7
   const show = async id => {
-    const d = await api(id ? `/api/faculty/${id}` : "/api/faculty/me"), pid = d.profile.id;
-    $("#fdetail").innerHTML = `<div class="panel"><h3>${esc(d.profile.full_name)}</h3><p class="muted">${esc(d.profile.employment_type)} · ${esc(d.profile.highest_degree || "degree not set")} ${d.profile.specialization ? "· " + esc(d.profile.specialization) : ""}</p>
-    ${table(["Kind", "Title", "Detail", "Year", "Scope"], d.records.map(r => `<tr><td>${esc(r.kind)}</td><td>${esc(r.title)}</td><td>${esc(r.detail || "")}</td><td>${esc(r.year || "")}</td><td>${esc(r.scope)}</td></tr>`))}
-    <form id="fr"><h3>Add record</h3><div class="row"><label>Kind<select name="kind"><option>education</option><option>credential</option><option>award</option><option>research</option><option>activity</option></select></label>
-    <label>Title<input name="title" required></label><label>Detail<input name="detail"></label><label>Year<input name="year" type="number" min="1950" max="2100"></label>
-    <label>Scope<select name="scope"><option>local</option><option>international</option></select></label><button>Add</button></div></form></div>`;
-    $("#fr").onsubmit = run(async e => { e.preventDefault(); await api(`/api/faculty/${pid}/records`, { json: Object.fromEntries(new FormData(e.target)) }); toast("Record added."); show(id); });
+    const d = await api(id ? `/api/faculty/${id}` : "/api/faculty/me");
+    $("#fdetail").innerHTML = facultySummary(d);
   };
-  el.innerHTML = `<h2>Faculty Information</h2>${chair() ? `<div class="panel"><label>Select faculty<select id="fsel"></select></label></div>` : ""}<div id="fdetail"></div>`;
-  if (chair()) { const l = await api("/api/faculty"); $("#fsel").innerHTML = opts(l, "id", "full_name"); $("#fsel").onchange = run(() => show($("#fsel").value)); if (l.length) await show(l[0].id); else $("#fdetail").innerHTML = "<p class='muted'>No faculty accounts yet.</p>"; }
-  else await show(null);
+  el.innerHTML = `<h2>Faculty/Teaching Information</h2>${chair() ? `<div class="panel"><label>Select faculty<select id="fsel"></select></label></div>` : ""}<div id="fdetail"></div>`;
+  if (chair()) {
+    const list = await api("/api/faculty");
+    $("#fsel").innerHTML = opts(list, "id", "full_name");
+    $("#fsel").onchange = run(() => show($("#fsel").value));
+    if (list.length) await show(list[0].id);
+    else $("#fdetail").innerHTML = "<p class='muted'>No faculty accounts yet.</p>";
+  } else {
+    await show(null);
+  }
+};
+
+VIEWS.profile = async el => {
+  el.innerHTML = `<h2>Profile</h2>
+    <section class="panel"><h3>Account information</h3><dl class="account-details">
+      <dt>Full name</dt><dd>${esc(me.name)}</dd><dt>Account email</dt><dd>${esc(me.email)}</dd>
+      <dt>Account type</dt><dd>${esc(me.role.replaceAll("_", " "))}</dd>
+    </dl></section>
+    <section class="panel"><h3>Password</h3><p class="muted">Password reset will be available in a future update.</p>
+      <form class="account-placeholder-form"><label>Current password<input type="password" autocomplete="current-password" disabled></label>
+      <label>New password<input type="password" autocomplete="new-password" disabled></label>
+      <button type="button" disabled>Reset password</button></form></section>
+    <section class="panel"><h3>Google Authenticator</h3><p class="muted">Authenticator management is not available here yet. Your existing sign-in verification remains unchanged.</p>
+      <button type="button" disabled>Set up Google Authenticator</button></section>
+    ${me.role === "faculty" ? `<div id="profile-faculty"></div>` : ""}`;
+
+  if (me.role !== "faculty") return;
+  const d = await api("/api/faculty/me"), p = d.profile;
+  const selectedCourses = new Set(d.courses.map(c => String(c.id)));
+  $("#profile-faculty").innerHTML = `<form id="faculty-profile-form" class="panel faculty-profile-form" enctype="multipart/form-data">
+    <h3>Faculty/Teaching Information</h3><p class="muted">Update your faculty details and courses handled. This information is visible to you and the Department Chair.</p>
+    <div class="faculty-photo-field">${facultyPhoto(p, p.id)}<label>2×2 photo (JPG, PNG, or WebP; up to 5 MB)<input type="file" name="photo" accept="image/jpeg,image/png,image/webp"></label></div>
+    <div class="faculty-profile-fields">
+      <label>Full name<input name="full_name" value="${esc(p.full_name)}" maxlength="160" required></label>
+      <label>UST email<input name="ust_email" type="email" value="${esc(p.ust_email || "")}" maxlength="254"></label>
+      <label>Address<textarea name="address" maxlength="1000">${esc(p.address || "")}</textarea></label>
+      <label>Contact number<input name="contact_number" type="tel" value="${esc(p.contact_number || "")}" maxlength="40"></label>
+      <label>Facebook name<input name="facebook_name" value="${esc(p.facebook_name || "")}" maxlength="120"></label>
+      <label>Faculty status<select name="faculty_status"><option value="Full-time" ${p.faculty_status === "Full-time" ? "selected" : ""}>Full-time</option><option value="Part-time" ${p.faculty_status === "Part-time" ? "selected" : ""}>Part-time</option></select></label>
+      <label>Date started/appointed<input name="date_started" type="date" value="${esc(p.date_started || "")}"></label>
+      <fieldset class="course-checkboxes"><legend>Courses handled</legend><small class="muted">Select all courses you currently handle.</small>
+        <div class="course-checkbox-list">${meta.courses.length
+          ? meta.courses.map(c => `<label><input type="checkbox" name="course_ids" value="${c.id}" ${selectedCourses.has(String(c.id)) ? "checked" : ""}> <span>${esc(c.code)} — ${esc(c.title)}</span></label>`).join("")
+          : `<p class="muted">No courses are currently available.</p>`}
+        </div>
+      </fieldset>
+    </div><button type="submit">Save information</button></form>
+    <section class="panel"><h3>Faculty records</h3>${table(["Kind", "Title", "Detail", "Year", "Scope"], d.records.map(r => `<tr><td>${esc(r.kind)}</td><td>${esc(r.title)}</td><td>${esc(r.detail || "")}</td><td>${esc(r.year || "")}</td><td>${esc(r.scope)}</td></tr>`))}
+    <form id="faculty-record-form"><h3>Add record</h3><div class="row"><label>Kind<select name="kind"><option>education</option><option>credential</option><option>award</option><option>research</option><option>activity</option></select></label>
+    <label>Title<input name="title" required></label><label>Detail<input name="detail"></label><label>Year<input name="year" type="number" min="1950" max="2100"></label>
+    <label>Scope<select name="scope"><option>local</option><option>international</option></select></label><button>Add</button></div></form></section>`;
+  $("#faculty-profile-form").onsubmit = run(async e => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    await api(`/api/faculty/${p.id}/profile`, { method: "PUT", body: formData });
+    me.name = formData.get("full_name");
+    $("#who").textContent = `${me.name} · ${me.role.replace("_", " ")}`;
+    $("#avatar").textContent = (me.name || "?")[0].toUpperCase();
+    toast("Faculty/Teaching Information saved.");
+    await VIEWS.profile(el);
+  });
+  $("#faculty-record-form").onsubmit = run(async e => {
+    e.preventDefault();
+    await api(`/api/faculty/${p.id}/records`, { json: Object.fromEntries(new FormData(e.target)) });
+    toast("Record added.");
+    await VIEWS.profile(el);
+  });
 };
 
 VIEWS.dashboard = async el => {   // 3.1 #8
