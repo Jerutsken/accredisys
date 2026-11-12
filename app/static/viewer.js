@@ -118,7 +118,6 @@ function drawHl() {
 }
 
 /* ----- selecting text -> floating Comment button ----- */
-const dedupe = rs => rs.filter((a, i) => !rs.some((b, j) => j !== i && b.left <= a.left + 1 && b.top <= a.top + 1 && b.right >= a.right - 1 && b.bottom >= a.bottom - 1 && (b.width * b.height > a.width * a.height || j < i)));
 function fab() {
   let f = $("#fab");
   if (!f) { f = document.createElement("button"); f.id = "fab"; f.className = "fab hidden"; f.textContent = "💬 Comment"; f.onmousedown = e => e.preventDefault(); f.onclick = startDraft; document.body.appendChild(f); }
@@ -135,7 +134,7 @@ function onSelect() {
     if (pg) (hits.get(pg) || hits.set(pg, []).get(pg)).push(r);
   }
   if (hits.size !== 1) { hideFab(); if (hits.size > 1) toast("Select text within a single page to comment.", true); return; }
-  const [[pg, rs]] = hits, b = pg.el.getBoundingClientRect(), clean = dedupe(rs), last = clean[clean.length - 1];
+  const [[pg, clean]] = hits, b = pg.el.getBoundingClientRect(), last = clean[clean.length - 1];
   V.sel = { page: pg.n, quote: sel.toString().replace(/\s+/g, " ").trim().slice(0, 1000),
     rects: clean.map(r => [(r.left - b.left) / b.width, (r.top - b.top) / b.height, r.width / b.width, r.height / b.height].map(v => Math.round(Math.min(1, Math.max(0, v)) * 1e5) / 1e5)) };
   const f = fab(); f.style.left = Math.min(innerWidth - 120, last.right) + "px"; f.style.top = last.bottom + 6 + "px"; f.classList.remove("hidden");
